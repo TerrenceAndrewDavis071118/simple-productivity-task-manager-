@@ -1,0 +1,12 @@
+# Build & packaging outputs
+build/
+dist/
+*.deb
+*.o
+*.out
+
+# Editor & OS temporary files
+.vscode/
+.idea/
+*.swp
+*~
