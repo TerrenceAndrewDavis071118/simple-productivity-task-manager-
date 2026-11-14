@@ -14,6 +14,12 @@ namespace tk {
 enum class Status { Active = 0, Achieved = 1, Trash = 2 };
 enum class StatScope { Range = 0, Day = 1, Month = 2, Year = 3 };
 enum class Outcome { OnTime = 0, Late = 1, Failed = 2 };
+enum class NotifKind { Ready = 0, Deadline5m = 1 };
+
+struct NotifItem {
+    long task_id = 0;
+    NotifKind kind = NotifKind::Ready;
+};
 
 struct Task {
     long id = 0;
@@ -24,6 +30,7 @@ struct Task {
     time_t completed_at = 0;
     Status status = Status::Active;
     bool notified = false;
+    bool warned_5m = false;
 };
 
 struct VictimItem {
@@ -183,12 +190,18 @@ public:
                 t.start_at = static_cast<time_t>(std::stoll(cols[3]));
                 t.deadline_at = static_cast<time_t>(std::stoll(cols[4]));
                 t.expires_at = static_cast<time_t>(std::stoll(cols[5]));
-                if (cols.size() >= 8) {
+                if (cols.size() >= 9) {
                     t.completed_at = static_cast<time_t>(std::stoll(cols[6]));
                     t.title = cols[7];
+                    t.warned_5m = (std::stoi(cols[8]) != 0);
+                } else if (cols.size() >= 8) {
+                    t.completed_at = static_cast<time_t>(std::stoll(cols[6]));
+                    t.title = cols[7];
+                    t.warned_5m = (t.deadline_at - t.start_at <= 300) || (t.deadline_at <= std::time(nullptr));
                 } else {
                     t.completed_at = 0;
                     t.title = cols[6];
+                    t.warned_5m = (t.deadline_at - t.start_at <= 300) || (t.deadline_at <= std::time(nullptr));
                 }
                 next_id = std::max(next_id, t.id + 1);
                 tasks.push_back(std::move(t));
@@ -211,7 +224,8 @@ public:
                 << static_cast<long long>(t.deadline_at) << '\t'
                 << static_cast<long long>(t.expires_at) << '\t'
                 << static_cast<long long>(t.completed_at) << '\t'
-                << sanitize(t.title) << '\n';
+                << sanitize(t.title) << '\t'
+                << (t.warned_5m ? 1 : 0) << '\n';
         }
     }
 
@@ -225,6 +239,7 @@ public:
         t.completed_at = 0;
         t.status = Status::Active;
         t.notified = false;
+        t.warned_5m = (deadline_at - start_at <= 300);
         tasks.push_back(std::move(t));
         save();
         return tasks.back();
@@ -263,18 +278,32 @@ public:
         return collect_stats([=](time_t ref) { return ref >= from_t && ref <= to_t; });
     }
 
-    std::vector<long> tick(time_t now, bool& changed) {
-        std::vector<long> to_notify;
+    std::vector<NotifItem> tick(time_t now, bool& changed) {
+        std::vector<NotifItem> to_notify;
         changed = false;
         for (auto& t : tasks) {
             if (t.status != Status::Active) continue;
             if (now >= t.expires_at) {
                 t.status = Status::Trash;
                 changed = true;
-            } else if (now >= t.start_at && !t.notified) {
-                t.notified = true;
-                changed = true;
-                to_notify.push_back(t.id);
+            } else {
+                if (now >= t.start_at && !t.notified) {
+                    t.notified = true;
+                    changed = true;
+                    if (now < t.deadline_at) {
+                        to_notify.push_back({t.id, NotifKind::Ready});
+                    }
+                }
+
+                const bool can_warn_5m = (t.deadline_at - t.start_at > 300);
+                if (can_warn_5m && now >= t.start_at && now >= t.deadline_at - 300 && now < t.deadline_at && !t.warned_5m) {
+                    t.warned_5m = true;
+                    changed = true;
+                    to_notify.push_back({t.id, NotifKind::Deadline5m});
+                } else if ((!can_warn_5m || now >= t.deadline_at) && !t.warned_5m) {
+                    t.warned_5m = true;
+                    changed = true;
+                }
             }
         }
         if (changed) save();

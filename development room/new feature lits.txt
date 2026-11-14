@@ -1,0 +1,13 @@
+new feature lits
+
+-beeb sound , alarm for beggining adn before deadline
+-notification reminder ,
+
+
+
+
+development target
+make clean database
+build for mac and windows
+
+

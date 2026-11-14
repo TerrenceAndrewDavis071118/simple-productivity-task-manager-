@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+cd "$(dirname "$0")/.."
+
 APP_NAME="task-killer"
 VERSION="1.0.0"
 ARCH="$(dpkg --print-architecture)"
@@ -14,11 +16,14 @@ mkdir -p \
   "${STAGE}/usr/bin" \
   "${STAGE}/usr/share/applications" \
   "${STAGE}/usr/share/icons/hicolor/scalable/apps" \
+  "${STAGE}/usr/share/task-killer/sounds" \
   "${OUT_DIR}"
 
 install -m 755 build/task-killer "${STAGE}/usr/bin/task-killer"
 install -m 644 assets/com.taskkiller.app.svg \
   "${STAGE}/usr/share/icons/hicolor/scalable/apps/com.taskkiller.app.svg"
+install -m 644 assets/beeb.wav \
+  "${STAGE}/usr/share/task-killer/sounds/beeb.wav"
 
 cat > "${STAGE}/usr/share/applications/com.taskkiller.app.desktop" <<'EOF'
 [Desktop Entry]
@@ -43,6 +48,7 @@ Priority: optional
 Architecture: ${ARCH}
 Installed-Size: ${INSTALLED_KB}
 Depends: libgtk-4-1, libnotify4
+Recommends: alsa-utils | pipewire-bin | libcanberra-gtk3-bin | pulseaudio-utils
 Maintainer: Task Killer <noreply@local>
 Description: Minimalist Apple-styled task manager for Zorin OS
 EOF

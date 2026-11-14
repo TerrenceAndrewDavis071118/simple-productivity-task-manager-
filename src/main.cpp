@@ -1,12 +1,15 @@
 #include <gtk/gtk.h>
 #include <libnotify/notify.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <string>
+#include <vector>
 
+#include "audio.hpp"
 #include "store.hpp"
 #include "style.hpp"
 
@@ -116,15 +119,38 @@ static void on_notif_closed(NotifyNotification* n, gpointer) {
     g_object_unref(n);
 }
 
-static void send_task_notification(AppState* s, const tk::Task& t) {
-    std::string body = "Deadline " + tk::format_hm(t.deadline_at);
-    const char* icon = std::filesystem::exists(
-        "/usr/share/icons/hicolor/scalable/apps/com.taskkiller.app.svg")
-        ? "com.taskkiller.app"
-        : "appointment-soon-symbolic";
 
-    NotifyNotification* n = notify_notification_new(t.title.c_str(), body.c_str(), icon);
-    notify_notification_set_urgency(n, NOTIFY_URGENCY_NORMAL);
+static void send_task_notification(AppState* s, const tk::Task& t, tk::NotifKind kind) {
+    std::string body;
+    if (kind == tk::NotifKind::Deadline5m) {
+        body = "5 minutes before deadline · " + tk::format_hm(t.deadline_at);
+    } else {
+        body = "Task ready · Deadline " + tk::format_hm(t.deadline_at);
+    }
+
+    std::error_code ec;
+    std::string icon_path;
+    if (std::filesystem::exists("/usr/share/icons/hicolor/scalable/apps/com.taskkiller.app.svg", ec)) {
+        icon_path = "com.taskkiller.app";
+    } else if (std::filesystem::exists("assets/com.taskkiller.app.svg", ec)) {
+        auto abs = std::filesystem::canonical("assets/com.taskkiller.app.svg", ec);
+        icon_path = (!ec) ? abs.string() : "assets/com.taskkiller.app.svg";
+    } else {
+        auto exe = std::filesystem::canonical("/proc/self/exe", ec);
+        if (!ec && !exe.empty()) {
+            auto ep = exe.parent_path() / "../assets/com.taskkiller.app.svg";
+            if (std::filesystem::exists(ep, ec)) {
+                auto canon = std::filesystem::canonical(ep, ec);
+                icon_path = (!ec) ? canon.string() : ep.string();
+            }
+        }
+        if (icon_path.empty()) {
+            icon_path = "appointment-soon-symbolic";
+        }
+    }
+
+    NotifyNotification* n = notify_notification_new(t.title.c_str(), body.c_str(), icon_path.c_str());
+    notify_notification_set_urgency(n, (kind == tk::NotifKind::Deadline5m) ? NOTIFY_URGENCY_CRITICAL : NOTIFY_URGENCY_NORMAL);
     notify_notification_set_timeout(n, NOTIFY_EXPIRES_DEFAULT);
 
     auto* ctx = g_new(NotifCtx, 1);
@@ -136,15 +162,17 @@ static void send_task_notification(AppState* s, const tk::Task& t) {
     if (!notify_notification_show(n, nullptr)) {
         g_object_unref(n);
     }
+
+    tk::play_alert_sound();
 }
 
 static gboolean on_timer_tick(gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     bool changed = false;
-    auto notify_ids = s->store.tick(std::time(nullptr), changed);
-    for (long id : notify_ids) {
-        if (const tk::Task* t = s->store.find(id)) {
-            send_task_notification(s, *t);
+    auto notify_events = s->store.tick(std::time(nullptr), changed);
+    for (const auto& ev : notify_events) {
+        if (const tk::Task* t = s->store.find(ev.task_id)) {
+            send_task_notification(s, *t, ev.kind);
         }
     }
     if (changed) {
