@@ -1,7 +1,7 @@
 new feature lits
 
--beeb sound , alarm for beggining adn before deadline
--notification reminder ,
+-beeb sound , alarm for beggining and before deadline
+-notification reminder , 14 november 2026
 
 
 
