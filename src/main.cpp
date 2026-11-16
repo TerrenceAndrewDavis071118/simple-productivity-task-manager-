@@ -1,5 +1,7 @@
 #include <gtk/gtk.h>
+#ifndef _WIN32
 #include <libnotify/notify.h>
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -9,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "platform.hpp"
 #include "audio.hpp"
 #include "store.hpp"
 #include "style.hpp"
@@ -78,10 +81,12 @@ struct AppState {
     tk::Store store;
 };
 
+#ifndef _WIN32
 struct NotifCtx {
     AppState* state;
     long task_id;
 };
+#endif
 
 static void refresh_ui(AppState* s);
 static void refresh_stats_view(AppState* s);
@@ -104,6 +109,7 @@ static void set_widget_task_id(GtkWidget* w, long id) {
                       reinterpret_cast<gpointer>(static_cast<intptr_t>(id)));
 }
 
+#ifndef _WIN32
 static void on_notif_done(NotifyNotification*, char*, gpointer user_data) {
     auto* ctx = static_cast<NotifCtx*>(user_data);
     if (ctx && ctx->state) {
@@ -118,7 +124,7 @@ static void on_notif_done(NotifyNotification*, char*, gpointer user_data) {
 static void on_notif_closed(NotifyNotification* n, gpointer) {
     g_object_unref(n);
 }
-
+#endif
 
 static void send_task_notification(AppState* s, const tk::Task& t, tk::NotifKind kind) {
     std::string body;
@@ -133,15 +139,18 @@ static void send_task_notification(AppState* s, const tk::Task& t, tk::NotifKind
     if (std::filesystem::exists("/usr/share/icons/hicolor/scalable/apps/com.taskkiller.app.svg", ec)) {
         icon_path = "com.taskkiller.app";
     } else if (std::filesystem::exists("assets/com.taskkiller.app.svg", ec)) {
-        auto abs = std::filesystem::canonical("assets/com.taskkiller.app.svg", ec);
-        icon_path = (!ec) ? abs.string() : "assets/com.taskkiller.app.svg";
+        icon_path = tk::normalize_path_string("assets/com.taskkiller.app.svg");
     } else {
-        auto exe = std::filesystem::canonical("/proc/self/exe", ec);
-        if (!ec && !exe.empty()) {
-            auto ep = exe.parent_path() / "../assets/com.taskkiller.app.svg";
+        auto exe = tk::get_executable_path();
+        if (!exe.empty()) {
+            auto ep = exe.parent_path() / "assets" / "com.taskkiller.app.svg";
             if (std::filesystem::exists(ep, ec)) {
-                auto canon = std::filesystem::canonical(ep, ec);
-                icon_path = (!ec) ? canon.string() : ep.string();
+                icon_path = tk::normalize_path_string(ep);
+            } else {
+                ep = exe.parent_path() / ".." / "assets" / "com.taskkiller.app.svg";
+                if (std::filesystem::exists(ep, ec)) {
+                    icon_path = tk::normalize_path_string(ep);
+                }
             }
         }
         if (icon_path.empty()) {
@@ -149,6 +158,7 @@ static void send_task_notification(AppState* s, const tk::Task& t, tk::NotifKind
         }
     }
 
+#ifndef _WIN32
     NotifyNotification* n = notify_notification_new(t.title.c_str(), body.c_str(), icon_path.c_str());
     notify_notification_set_urgency(n, (kind == tk::NotifKind::Deadline5m) ? NOTIFY_URGENCY_CRITICAL : NOTIFY_URGENCY_NORMAL);
     notify_notification_set_timeout(n, NOTIFY_EXPIRES_DEFAULT);
@@ -162,6 +172,81 @@ static void send_task_notification(AppState* s, const tk::Task& t, tk::NotifKind
     if (!notify_notification_show(n, nullptr)) {
         g_object_unref(n);
     }
+#else
+    (void)s;
+    std::string win_body;
+    if (kind == tk::NotifKind::Deadline5m) {
+        win_body = "5 minutes before deadline - " + tk::format_hm(t.deadline_at);
+    } else {
+        win_body = "Task ready - Deadline " + tk::format_hm(t.deadline_at);
+    }
+
+    auto escape_ps = [](const std::string& str) {
+        std::string res;
+        for (char c : str) {
+            if (c == '\'') res += "''";
+            else if (c == '`') res += "``";
+            else if (c == '\n' || c == '\r' || c == '\t') res += ' ';
+            else res += c;
+        }
+        return res;
+    };
+
+    std::string esc_title = escape_ps(t.title);
+    std::string esc_body = escape_ps(win_body);
+
+    // Windows 10/11 requires a registered AUMID to display WinRT toast notifications.
+    // Using PowerShell's standard AUMID ({1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe)
+    // guarantees delivery without needing a Start Menu installer shortcut.
+    // A try-catch block provides fallback to System.Windows.Forms balloon tips if WinRT is unavailable.
+    std::string ps_cmd =
+        "try { "
+        "  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; "
+        "  $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); "
+        "  $textNodes = $template.GetElementsByTagName('text'); "
+        "  $textNodes.Item(0).AppendChild($template.CreateTextNode('" + esc_title + "')) > $null; "
+        "  $textNodes.Item(1).AppendChild($template.CreateTextNode('" + esc_body + "')) > $null; "
+        "  $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'; "
+        "  $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId); "
+        "  $notifier.Show([Windows.UI.Notifications.ToastNotification]::new($template)); "
+        "} catch { "
+        "  try { "
+        "    Add-Type -AssemblyName System.Windows.Forms; "
+        "    $notify = New-Object System.Windows.Forms.NotifyIcon; "
+        "    $notify.Icon = [System.Drawing.SystemIcons]::Information; "
+        "    $notify.BalloonTipTitle = '" + esc_title + "'; "
+        "    $notify.BalloonTipText = '" + esc_body + "'; "
+        "    $notify.Visible = $true; "
+        "    $notify.ShowBalloonTip(5000); "
+        "  } catch {} "
+        "}";
+
+    std::vector<const char*> argv = {
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy", "Bypass",
+        "-WindowStyle", "Hidden",
+        "-Command",
+        ps_cmd.c_str(),
+        nullptr
+    };
+
+    GError* err = nullptr;
+    g_spawn_async(
+        nullptr,
+        const_cast<char**>(argv.data()),
+        nullptr,
+        static_cast<GSpawnFlags>(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL),
+        nullptr,
+        nullptr,
+        nullptr,
+        &err
+    );
+    if (err) {
+        g_error_free(err);
+    }
+#endif
 
     tk::play_alert_sound();
 }
@@ -707,7 +792,7 @@ static void sync_picker_ui(AppState* s) {
     g_date_time_unref(dt);
 
     std::tm tm_cur{};
-    localtime_r(&cur, &tm_cur);
+    tk::localtime_safe(&cur, &tm_cur);
     char hbuf[4], mbuf[4];
     std::snprintf(hbuf, sizeof(hbuf), "%02d", tm_cur.tm_hour);
     std::snprintf(mbuf, sizeof(mbuf), "%02d", tm_cur.tm_min);
@@ -736,7 +821,7 @@ static void draw_clock_face(GtkDrawingArea* area, cairo_t* cr, int width, int he
     double num_r = dial_r - 17.0;
 
     std::tm tm_cur{};
-    localtime_r(&s->draft_times[s->active_slot], &tm_cur);
+    tk::localtime_safe(&s->draft_times[s->active_slot], &tm_cur);
     bool is_pm = tm_cur.tm_hour >= 12;
 
     cairo_arc(cr, cx, cy, dial_r, 0, 2 * PI);
@@ -805,7 +890,7 @@ static void apply_clock_point(AppState* s, double x, double y) {
     if (theta < 0) theta += 2.0 * PI;
 
     std::tm tm_cur{};
-    localtime_r(&s->draft_times[s->active_slot], &tm_cur);
+    tk::localtime_safe(&s->draft_times[s->active_slot], &tm_cur);
 
     if (s->editing_minute) {
         int m = static_cast<int>(std::llround((theta / (2.0 * PI)) * 60.0)) % 60;
@@ -884,7 +969,7 @@ static void on_min_btn_clicked(GtkButton*, gpointer user_data) {
 static void on_ampm_clicked(GtkButton*, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     std::tm tm_cur{};
-    localtime_r(&s->draft_times[s->active_slot], &tm_cur);
+    tk::localtime_safe(&s->draft_times[s->active_slot], &tm_cur);
     int new_hour = (tm_cur.tm_hour >= 12) ? (tm_cur.tm_hour - 12) : (tm_cur.tm_hour + 12);
     s->draft_times[s->active_slot] = tk::with_hm(
         s->draft_times[s->active_slot], new_hour, tm_cur.tm_min);
@@ -901,7 +986,7 @@ static gboolean on_time_scroll(GtkEventControllerScroll* ctrl, double, double dy
     int step = (dy < 0) ? 1 : -1;
 
     std::tm tm_cur{};
-    localtime_r(&s->draft_times[s->active_slot], &tm_cur);
+    tk::localtime_safe(&s->draft_times[s->active_slot], &tm_cur);
     if (is_min) {
         tm_cur.tm_min = (tm_cur.tm_min + step + 60) % 60;
         s->editing_minute = true;
@@ -1310,10 +1395,10 @@ static void build_window(AppState* s) {
     g_object_unref(css);
 
     time_t now = std::time(nullptr);
-    localtime_r(&now, &s->stat_date);
+    tk::localtime_safe(&now, &s->stat_date);
     s->range_to = s->stat_date;
     time_t week_ago = now - 6 * 86400;
-    localtime_r(&week_ago, &s->range_from);
+    tk::localtime_safe(&week_ago, &s->range_from);
 
     s->window = gtk_application_window_new(s->app);
     gtk_widget_add_css_class(s->window, "tk-window");
@@ -1398,7 +1483,9 @@ static void on_activate(GtkApplication*, gpointer user_data) {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifndef _WIN32
     notify_init("Task Killer");
+#endif
 
     AppState state;
     state.store.load();
@@ -1423,6 +1510,8 @@ int main(int argc, char** argv) {
     g_object_unref(quit_act);
     g_object_unref(new_act);
     g_object_unref(state.app);
+#ifndef _WIN32
     notify_uninit();
+#endif
     return status;
 }

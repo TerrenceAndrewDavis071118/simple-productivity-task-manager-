@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "platform.hpp"
+
 namespace tk {
 
 enum class Status { Active = 0, Achieved = 1, Trash = 2 };
@@ -51,7 +53,7 @@ struct StatSummary {
 
 inline std::string format_hm(time_t t) {
     std::tm tm_val{};
-    localtime_r(&t, &tm_val);
+    localtime_safe(&t, &tm_val);
     char buf[8];
     std::snprintf(buf, sizeof(buf), "%02d:%02d", tm_val.tm_hour, tm_val.tm_min);
     return buf;
@@ -59,8 +61,8 @@ inline std::string format_hm(time_t t) {
 
 inline std::string format_slot(time_t t, time_t now) {
     std::tm tm_t{}, tm_n{};
-    localtime_r(&t, &tm_t);
-    localtime_r(&now, &tm_n);
+    localtime_safe(&t, &tm_t);
+    localtime_safe(&now, &tm_n);
     if (tm_t.tm_year == tm_n.tm_year && tm_t.tm_yday == tm_n.tm_yday) {
         return format_hm(t);
     }
@@ -122,7 +124,7 @@ inline time_t day_end(const std::tm& d) {
 
 inline time_t with_date(time_t t, int year, int month_1_12, int day) {
     std::tm tm_val{};
-    localtime_r(&t, &tm_val);
+    localtime_safe(&t, &tm_val);
     tm_val.tm_year = year - 1900;
     tm_val.tm_mon = month_1_12 - 1;
     tm_val.tm_mday = day;
@@ -132,7 +134,7 @@ inline time_t with_date(time_t t, int year, int month_1_12, int day) {
 
 inline time_t with_hm(time_t t, int hour, int minute) {
     std::tm tm_val{};
-    localtime_r(&t, &tm_val);
+    localtime_safe(&t, &tm_val);
     tm_val.tm_hour = hour;
     tm_val.tm_min = minute;
     tm_val.tm_sec = 0;
@@ -148,7 +150,7 @@ inline std::string sanitize(std::string s) {
 
 inline bool in_scope(time_t ref, const std::tm& sel, StatScope scope) {
     std::tm tm_r{};
-    localtime_r(&ref, &tm_r);
+    localtime_safe(&ref, &tm_r);
     if (tm_r.tm_year != sel.tm_year) return false;
     if (scope == StatScope::Year) return true;
     if (tm_r.tm_mon != sel.tm_mon) return false;
@@ -161,17 +163,14 @@ public:
     std::vector<Task> tasks;
     long next_id = 1;
 
-    Store() {
-        const char* xdg = std::getenv("XDG_DATA_HOME");
-        std::filesystem::path base = (xdg && *xdg)
-            ? std::filesystem::path(xdg)
-            : (std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : ".") / ".local" / "share");
-        db_path_ = base / "task-killer" / "tasks.db";
-    }
+    explicit Store(std::filesystem::path db_path = get_default_data_dir() / "tasks.db")
+        : db_path_(std::move(db_path)) {}
+
+    const std::filesystem::path& db_path() const { return db_path_; }
 
     void load() {
         tasks.clear();
-        std::ifstream in(db_path_);
+        std::ifstream in(db_path_.string());
         if (!in) return;
         std::string line;
         while (std::getline(in, line)) {
@@ -214,7 +213,7 @@ public:
     void save() const {
         std::error_code ec;
         std::filesystem::create_directories(db_path_.parent_path(), ec);
-        std::ofstream out(db_path_, std::ios::trunc);
+        std::ofstream out(db_path_.string(), std::ios::trunc);
         if (!out) return;
         for (const auto& t : tasks) {
             out << t.id << '\t'

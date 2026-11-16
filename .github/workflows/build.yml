@@ -1,0 +1,84 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ "**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  linux-build:
+    name: Linux (Ubuntu) Build & Package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgtk-4-dev \
+            libnotify-dev \
+            libcanberra-gtk3-module \
+            libcanberra-gtk-module \
+            alsa-utils
+
+      - name: Run unit & integration tests
+        run: |
+          make clean
+          make test
+
+      - name: Build Debian package
+        run: |
+          make deb
+
+      - name: Upload Debian Package (.deb)
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-killer-linux-amd64-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  windows-build:
+    name: Windows (MinGW-w64 UCRT64) Build & Package
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            make
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-ntldd
+
+      - name: Run unit & integration tests
+        shell: msys2 {0}
+        run: |
+          make test
+
+      - name: Build Windows executable and package ZIP
+        shell: msys2 {0}
+        run: |
+          make zip
+
+      - name: Upload Windows Package (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-killer-windows-x64-zip
+          path: dist/*.zip
+          if-no-files-found: error

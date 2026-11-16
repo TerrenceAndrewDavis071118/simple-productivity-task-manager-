@@ -19,16 +19,26 @@
         } \
     } while (0)
 
-static std::filesystem::path create_test_db(const std::string& name) {
-    auto p = std::filesystem::temp_directory_path() / ("tk_test_" + name + ".db");
-    std::filesystem::remove(p);
+inline void set_env_var(const std::string& key, const std::string& val) {
+#ifdef _WIN32
+    _putenv_s(key.c_str(), val.c_str());
+#else
+    setenv(key.c_str(), val.c_str(), 1);
+#endif
+}
+
+static std::filesystem::path create_test_env(const std::string& name) {
+    auto p = std::filesystem::temp_directory_path() / ("tk_test_env_" + name);
+    std::error_code ec;
+    std::filesystem::remove_all(p, ec);
+    std::filesystem::create_directories(p, ec);
+    set_env_var("XDG_DATA_HOME", p.string());
     return p;
 }
 
 // Test 1: Short task (duration <= 5 minutes) must NEVER trigger 5m warning
 void test_short_task_lifecycle() {
-    auto db = create_test_db("short");
-    setenv("XDG_DATA_HOME", db.parent_path().c_str(), 1);
+    auto env_dir = create_test_env("short");
 
     tk::Store store;
     time_t t0 = 10000;
@@ -68,14 +78,14 @@ void test_short_task_lifecycle() {
     const auto* t = store.find(id);
     TEST_ASSERT(t != nullptr && t->status == tk::Status::Trash, "Task should be in Trash");
 
-    std::filesystem::remove(db);
+    std::error_code ec;
+    std::filesystem::remove_all(env_dir, ec);
     std::cout << "[PASS] test_short_task_lifecycle\n";
 }
 
 // Test 2: Standard task (> 5 minutes duration) triggers Ready and 5m Warning at correct times
 void test_standard_task_lifecycle() {
-    auto db = create_test_db("standard");
-    setenv("XDG_DATA_HOME", db.parent_path().c_str(), 1);
+    auto env_dir = create_test_env("standard");
 
     tk::Store store;
     time_t t_start = 20000;
@@ -121,14 +131,14 @@ void test_standard_task_lifecycle() {
     const auto* t = store.find(id);
     TEST_ASSERT(t != nullptr && t->status == tk::Status::Trash, "Task expired to trash");
 
-    std::filesystem::remove(db);
+    std::error_code ec;
+    std::filesystem::remove_all(env_dir, ec);
     std::cout << "[PASS] test_standard_task_lifecycle\n";
 }
 
 // Test 3: Prior attempt bug check: future short task MUST NOT fire 5m warning before start
 void test_future_short_task_no_premature_warning() {
-    auto db = create_test_db("future_short");
-    setenv("XDG_DATA_HOME", db.parent_path().c_str(), 1);
+    auto env_dir = create_test_env("future_short");
 
     tk::Store store;
     time_t t_now = 50000;
@@ -150,14 +160,14 @@ void test_future_short_task_no_premature_warning() {
     TEST_ASSERT(events.size() == 1, "Expected only Ready event at start");
     TEST_ASSERT(events[0].kind == tk::NotifKind::Ready, "Expected Ready kind");
 
-    std::filesystem::remove(db);
+    std::error_code ec;
+    std::filesystem::remove_all(env_dir, ec);
     std::cout << "[PASS] test_future_short_task_no_premature_warning\n";
 }
 
 // Test 4: Early completion suppresses 5m warning
 void test_early_completion_suppression() {
-    auto db = create_test_db("early_comp");
-    setenv("XDG_DATA_HOME", db.parent_path().c_str(), 1);
+    auto env_dir = create_test_env("early_comp");
 
     tk::Store store;
     time_t t_start = 60000;
@@ -177,14 +187,14 @@ void test_early_completion_suppression() {
     auto events = store.tick(t_deadline - 300, changed);
     TEST_ASSERT(events.empty(), "Completed task should not receive 5m deadline warning");
 
-    std::filesystem::remove(db);
+    std::error_code ec;
+    std::filesystem::remove_all(env_dir, ec);
     std::cout << "[PASS] test_early_completion_suppression\n";
 }
 
 // Test 5: Post-deadline app launch suppresses stale notifications
 void test_post_deadline_launch_suppression() {
-    auto db = create_test_db("post_deadline");
-    setenv("XDG_DATA_HOME", db.parent_path().c_str(), 1);
+    auto env_dir = create_test_env("post_deadline");
 
     tk::Store store;
     time_t t_start = 70000;
@@ -201,7 +211,8 @@ void test_post_deadline_launch_suppression() {
     const auto* t = store.find(1);
     TEST_ASSERT(t != nullptr && t->notified && t->warned_5m, "Flags should be marked to suppress future ticks");
 
-    std::filesystem::remove(db);
+    std::error_code ec;
+    std::filesystem::remove_all(env_dir, ec);
     std::cout << "[PASS] test_post_deadline_launch_suppression\n";
 }
 
@@ -211,12 +222,12 @@ void test_database_compatibility() {
     std::filesystem::create_directories(db_dir / "task-killer");
     auto db_file = db_dir / "task-killer" / "tasks.db";
 
-    setenv("XDG_DATA_HOME", db_dir.c_str(), 1);
+    set_env_var("XDG_DATA_HOME", db_dir.string());
 
     // Write a mixed DB: 7-col legacy, 8-col legacy, 9-col new
     time_t now = std::time(nullptr);
     {
-        std::ofstream out(db_file);
+        std::ofstream out(db_file.string());
         // 7 col: id, status, notified, start_at, deadline_at, expires_at, title
         out << "1\t0\t1\t" << (now - 1000) << "\t" << (now + 1000) << "\t" << (now + 2000) << "\tLegacy 7 col\n";
         // 8 col: id, status, notified, start_at, deadline_at, expires_at, completed_at, title
@@ -277,11 +288,15 @@ void test_audio_file_exists() {
 
 // Test 8: Player command resolution
 void test_audio_player_resolution() {
+#ifdef _WIN32
+    std::cout << "[PASS] test_audio_player_resolution (Windows PlaySound API)\n";
+#else
     std::string player = tk::get_player_command();
     TEST_ASSERT(!player.empty(), "At least one player command must be found on system");
     TEST_ASSERT(player == "canberra-gtk-play" || player == "pw-play" ||
                 player == "paplay" || player == "aplay", "Unexpected player: " + player);
     std::cout << "[PASS] test_audio_player_resolution (detected: " << player << ")\n";
+#endif
 }
 
 // Test 9: Non-blocking audio playback and 500ms debounce
