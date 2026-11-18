@@ -24,7 +24,6 @@ jobs:
             libgtk-4-dev \
             libnotify-dev \
             libcanberra-gtk3-module \
-            libcanberra-gtk-module \
             alsa-utils
 
       - name: Run unit & integration tests

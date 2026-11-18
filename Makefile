@@ -29,9 +29,12 @@ endif
 SRC := src/main.cpp
 HEADERS := src/platform.hpp src/store.hpp src/style.hpp src/audio.hpp
 
-.PHONY: all clean deb test zip
+.PHONY: all clean deb test zip run
 
 all: $(TARGET)
+
+run: all
+	./$(TARGET)
 
 $(TARGET): $(SRC) $(HEADERS)
 	@mkdir -p build
