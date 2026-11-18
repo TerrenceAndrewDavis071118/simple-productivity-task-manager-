@@ -8,12 +8,12 @@ constexpr const char* APP_CSS = R"CSS(
 }
 
 window.tk-window {
-    background-color: #141416;
+    background-color: #0B0B0D;
     color: #F5F5F7;
 }
 
 headerbar.tk-header {
-    background-color: #141416;
+    background-color: #0B0B0D;
     border: none;
     box-shadow: none;
     min-height: 44px;
@@ -114,16 +114,18 @@ list.tk-list > row:hover {
 }
 
 box.tk-row {
-    background-color: #1C1C1E;
-    border: 1px solid #262629;
+    background-color: #121215;
+    border: 1px solid #1C1C20;
     border-radius: 12px;
-    padding: 11px 14px;
-    transition: background-color 120ms ease, border-color 120ms ease;
+    padding: 12px 15px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
 box.tk-row:hover {
-    background-color: #232326;
-    border-color: #323236;
+    background-color: #17171C;
+    border-color: #26262C;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
 }
 
 checkbutton.tk-check check {
@@ -409,8 +411,8 @@ label.tk-app-title {
 }
 
 box.tk-stat-card {
-    background-color: #1C1C1E;
-    border: 1px solid #262629;
+    background-color: #121215;
+    border: 1px solid #1C1C20;
     border-radius: 14px;
     padding: 14px 16px;
 }
@@ -515,6 +517,148 @@ label.tk-range-sep {
     font-size: 12px;
     font-weight: 600;
     color: #636366;
+}
+
+label.tk-view-count {
+    font-size: 14px;
+    font-weight: 500;
+    color: #8E8E93;
+    padding-bottom: 2px;
+}
+
+/* Hamburger 3-line menu button in top-left */
+menubutton.tk-nav-menu-btn > button {
+    background-color: transparent;
+    color: #AEAEB2;
+    border: none;
+    border-radius: 8px;
+    min-width: 32px;
+    min-height: 32px;
+    padding: 4px;
+    box-shadow: none;
+    transition: all 120ms ease;
+}
+
+menubutton.tk-nav-menu-btn > button:hover,
+menubutton.tk-nav-menu-btn.active > button {
+    background-color: #262629;
+    color: #F5F5F7;
+}
+
+/* Menu popover items */
+button.tk-menu-item-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #AEAEB2;
+    font-size: 13px;
+    font-weight: 500;
+    min-width: 170px;
+}
+
+button.tk-menu-item-btn:hover {
+    background-color: #262629;
+    color: #F5F5F7;
+}
+
+/* Add task banner below title, matching running task style without shadow */
+menubutton.tk-add-banner-btn {
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 2px 0 6px 0;
+}
+
+menubutton.tk-add-banner-btn > button {
+    background-color: #131317;
+    border: 1px solid #222228;
+    border-radius: 12px;
+    padding: 11px 15px;
+    box-shadow: none;
+    color: #8E8E93;
+    transition: background-color 130ms ease, border-color 130ms ease;
+}
+
+menubutton.tk-add-banner-btn > button:hover {
+    background-color: #19191F;
+    border-color: #31313A;
+    color: #F5F5F7;
+    box-shadow: none;
+}
+
+box.tk-add-plus-badge {
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 999px;
+    border: 1.5px solid #48484E;
+    background-color: #18181E;
+    color: #AEAEB2;
+    padding: 2px;
+    transition: all 120ms ease;
+}
+
+menubutton.tk-add-banner-btn > button:hover box.tk-add-plus-badge {
+    border-color: #8E8E93;
+    background-color: #22222B;
+    color: #F5F5F7;
+}
+
+label.tk-add-placeholder {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: #7A7A82;
+}
+
+menubutton.tk-add-banner-btn > button:hover label.tk-add-placeholder {
+    color: #AEAEB2;
+}
+
+label.tk-add-shortcut {
+    font-size: 11px;
+    font-weight: 500;
+    color: #636366;
+    background-color: #18181E;
+    border: 1px solid #24242B;
+    border-radius: 6px;
+    padding: 2px 7px;
+    margin-left: 4px;
+}
+
+/* Collapsible side drawer on the left */
+box.tk-side-panel {
+    background-color: #101013;
+    border-right: 1px solid #1C1C20;
+    padding: 14px 14px;
+    transition: all 150ms ease;
+}
+
+box.tk-side-hdr {
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1C1C20;
+}
+
+label.tk-side-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #F5F5F7;
+}
+
+button.tk-side-close {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 999px;
+    color: #8E8E93;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 2px;
+}
+
+button.tk-side-close:hover {
+    background-color: #2C2C2E;
+    color: #F5F5F7;
 }
 )CSS";
 

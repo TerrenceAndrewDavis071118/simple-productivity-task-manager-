@@ -20,14 +20,12 @@ namespace {
 
 constexpr double PI = 3.14159265358979323846;
 
-enum class NavPage { Active = 0, Achieved = 1, Stats = 2 };
-
 struct AppState {
     GtkApplication* app = nullptr;
     GtkWidget* window = nullptr;
-    GtkWidget* list_scroller = nullptr;
     GtkWidget* list_box = nullptr;
     GtkWidget* view_title = nullptr;
+    GtkWidget* view_count_lbl = nullptr;
     GtkWidget* empty_label = nullptr;
     GtkWidget* add_menu_btn = nullptr;
     GtkWidget* add_popover = nullptr;
@@ -40,11 +38,28 @@ struct AppState {
     GtkWidget* min_btn = nullptr;
     GtkWidget* ampm_btn = nullptr;
     GtkWidget* form_err = nullptr;
-    GtkWidget* nav_btn[3]{};
-    GtkWidget* nav_count[2]{};
+
+    // Hamburger menu (toggle 3 garis di kiri atas)
+    GtkWidget* menu_btn = nullptr;
+    GtkWidget* menu_popover = nullptr;
+    GtkWidget* menu_achiev_btn = nullptr;
+    GtkWidget* menu_stats_btn = nullptr;
+
+    // Add task banner labels
+    GtkWidget* add_placeholder_lbl = nullptr;
+    GtkWidget* add_shortcut_lbl = nullptr;
+
+    // Collapsible side drawer on the left for Achievements & Statistics
+    GtkWidget* side_panel = nullptr;
+    GtkWidget* side_stack = nullptr;
+    GtkWidget* side_title = nullptr;
+    GtkWidget* side_close_btn = nullptr;
+
+    // Achievements in side drawer
+    GtkWidget* achiev_list_box = nullptr;
+    GtkWidget* achiev_empty_label = nullptr;
 
     // Statistics widgets
-    GtkWidget* stats_box = nullptr;
     GtkWidget* scope_btn[4]{}; // Range, Day, Month, Year
     GtkWidget* period_nav_box = nullptr;
     GtkWidget* period_menu_btn = nullptr;
@@ -77,7 +92,7 @@ struct AppState {
     double drag_x0 = 0.0;
     double drag_y0 = 0.0;
 
-    NavPage current_view = NavPage::Active;
+    std::string active_side_page; // empty when closed, "achiev" or "stats"
     tk::Store store;
 };
 
@@ -277,7 +292,8 @@ static void on_check_toggled(GtkCheckButton* btn, gpointer user_data) {
 static void on_delete_clicked(GtkButton* btn, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     long id = widget_task_id(GTK_WIDGET(btn));
-    if (s->current_view == NavPage::Active) {
+    const tk::Task* t = s->store.find(id);
+    if (t && t->status == tk::Status::Active) {
         s->store.set_status(id, tk::Status::Trash);
     } else {
         s->store.remove_permanently(id);
@@ -420,8 +436,8 @@ static void draw_pie_chart(GtkDrawingArea* area, cairo_t* cr, int width, int hei
     auto* s = static_cast<AppState*>(user_data);
     double cx = width / 2.0;
     double cy = height / 2.0;
-    double r = std::min(cx - 94.0, cy - 18.0);
-    if (r < 48.0) r = std::min(cx, cy) - 8.0;
+    double r = std::min(cx - 36.0, cy - 16.0);
+    if (r < 38.0) r = std::min(cx, cy) - 10.0;
 
     int total = s->current_stats.total();
     if (total == 0) {
@@ -644,52 +660,81 @@ static void refresh_stats_view(AppState* s) {
 }
 
 static void refresh_ui(AppState* s) {
-    const char* titles[] = {"Tasks", "Achievements", "Statistics"};
-    const char* empties[] = {"No tasks", "No achievements yet"};
-    int idx = static_cast<int>(s->current_view);
-
-    gtk_label_set_text(GTK_LABEL(s->view_title), titles[idx]);
-
-    for (int i = 0; i < 3; ++i) {
-        if (i == idx) gtk_widget_add_css_class(s->nav_btn[i], "active");
-        else gtk_widget_remove_css_class(s->nav_btn[i], "active");
-    }
-    for (int i = 0; i < 2; ++i) {
-        int c = s->store.count(static_cast<tk::Status>(i));
-        gtk_label_set_text(GTK_LABEL(s->nav_count[i]), std::to_string(c).c_str());
+    // Update active task count
+    int active_count = s->store.count(tk::Status::Active);
+    std::string count_str = "(" + std::to_string(active_count) + ")";
+    if (s->view_count_lbl) {
+        gtk_label_set_text(GTK_LABEL(s->view_count_lbl), count_str.c_str());
     }
 
-    bool is_stats = (s->current_view == NavPage::Stats);
-    gtk_widget_set_visible(s->list_scroller, !is_stats);
-    gtk_widget_set_visible(s->stats_box, is_stats);
-
-    if (is_stats) {
-        refresh_stats_view(s);
-        return;
-    }
-
-    tk::Status target = (s->current_view == NavPage::Active)
-        ? tk::Status::Active
-        : tk::Status::Achieved;
+    // Refresh active tasks list
     gtk_list_box_remove_all(GTK_LIST_BOX(s->list_box));
-
     int visible_rows = 0;
     for (const auto& t : s->store.tasks) {
-        if (t.status == target) {
+        if (t.status == tk::Status::Active) {
             gtk_list_box_append(GTK_LIST_BOX(s->list_box), build_task_row(s, t));
             ++visible_rows;
         }
     }
-
-    gtk_label_set_text(GTK_LABEL(s->empty_label), empties[idx]);
     gtk_widget_set_visible(s->empty_label, visible_rows == 0);
+
+    // Update menu achievements item label with count
+    int achiev_count = s->store.count(tk::Status::Achieved);
+    std::string achiev_menu_txt = "Achievements (" + std::to_string(achiev_count) + ")";
+    if (s->menu_achiev_btn) {
+        gtk_button_set_label(GTK_BUTTON(s->menu_achiev_btn), achiev_menu_txt.c_str());
+    }
+
+    // Update side drawer panel content if open
+    bool panel_open = !s->active_side_page.empty();
+    gtk_widget_set_visible(s->side_panel, panel_open);
+    if (s->menu_btn) {
+        if (panel_open) gtk_widget_add_css_class(s->menu_btn, "active");
+        else gtk_widget_remove_css_class(s->menu_btn, "active");
+    }
+
+    if (s->active_side_page == "achiev") {
+        gtk_label_set_text(GTK_LABEL(s->side_title), ("Achievements (" + std::to_string(achiev_count) + ")").c_str());
+        gtk_stack_set_visible_child_name(GTK_STACK(s->side_stack), "achiev");
+        gtk_list_box_remove_all(GTK_LIST_BOX(s->achiev_list_box));
+        int achiev_rows = 0;
+        for (const auto& t : s->store.tasks) {
+            if (t.status == tk::Status::Achieved) {
+                gtk_list_box_append(GTK_LIST_BOX(s->achiev_list_box), build_task_row(s, t));
+                ++achiev_rows;
+            }
+        }
+        gtk_widget_set_visible(s->achiev_empty_label, achiev_rows == 0);
+    } else if (s->active_side_page == "stats") {
+        gtk_label_set_text(GTK_LABEL(s->side_title), "Statistics");
+        gtk_stack_set_visible_child_name(GTK_STACK(s->side_stack), "stats");
+        refresh_stats_view(s);
+    }
 }
 
-static void on_nav_clicked(GtkButton* btn, gpointer user_data) {
+static void on_open_side_page(AppState* s, const std::string& page) {
+    if (s->active_side_page == page) {
+        s->active_side_page.clear();
+    } else {
+        s->active_side_page = page;
+    }
+    if (s->menu_popover) {
+        gtk_popover_popdown(GTK_POPOVER(s->menu_popover));
+    }
+    refresh_ui(s);
+}
+
+static void on_menu_achiev_clicked(GtkButton*, gpointer user_data) {
+    on_open_side_page(static_cast<AppState*>(user_data), "achiev");
+}
+
+static void on_menu_stats_clicked(GtkButton*, gpointer user_data) {
+    on_open_side_page(static_cast<AppState*>(user_data), "stats");
+}
+
+static void on_side_close_clicked(GtkButton*, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
-    int idx = static_cast<int>(
-        reinterpret_cast<intptr_t>(g_object_get_data(G_OBJECT(btn), "nav-idx")));
-    s->current_view = static_cast<NavPage>(idx);
+    s->active_side_page.clear();
     refresh_ui(s);
 }
 
@@ -1003,9 +1048,37 @@ static gboolean on_time_scroll(GtkEventControllerScroll* ctrl, double, double dy
     return TRUE;
 }
 
+static void on_title_entry_changed(GtkEditable* editable, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    const char* txt = gtk_editable_get_text(editable);
+    if (!txt || txt[0] == '\0') {
+        if (s->add_placeholder_lbl) {
+            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+        }
+        if (s->add_shortcut_lbl) {
+            gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+        }
+    } else {
+        if (s->add_placeholder_lbl) {
+            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), txt);
+        }
+        if (s->add_shortcut_lbl) {
+            gtk_widget_set_visible(s->add_shortcut_lbl, FALSE);
+        }
+    }
+}
+
 static void on_popover_visible(GObject* obj, GParamSpec*, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
-    if (!gtk_widget_get_visible(GTK_WIDGET(obj))) return;
+    if (!gtk_widget_get_visible(GTK_WIDGET(obj))) {
+        if (s->add_placeholder_lbl) {
+            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+        }
+        if (s->add_shortcut_lbl) {
+            gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+        }
+        return;
+    }
 
     time_t now = std::time(nullptr);
     now -= (now % 60);
@@ -1020,6 +1093,12 @@ static void on_popover_visible(GObject* obj, GParamSpec*, gpointer user_data) {
     s->editing_minute = false;
 
     gtk_editable_set_text(GTK_EDITABLE(s->title_entry), "");
+    if (s->add_placeholder_lbl) {
+        gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+    }
+    if (s->add_shortcut_lbl) {
+        gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+    }
     gtk_widget_set_visible(s->form_err, FALSE);
     sync_picker_ui(s);
     gtk_widget_grab_focus(s->title_entry);
@@ -1050,8 +1129,13 @@ static void submit_add_task(AppState* s) {
     }
 
     s->store.add(title, start_at, deadline_at, expires_at);
-    s->current_view = NavPage::Active;
     gtk_popover_popdown(GTK_POPOVER(s->add_popover));
+    if (s->add_placeholder_lbl) {
+        gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+    }
+    if (s->add_shortcut_lbl) {
+        gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+    }
     on_timer_tick(s);
     refresh_ui(s);
 }
@@ -1078,7 +1162,8 @@ static GtkWidget* build_add_popover(AppState* s) {
 
     s->title_entry = gtk_entry_new();
     gtk_widget_add_css_class(s->title_entry, "tk-entry");
-    gtk_entry_set_placeholder_text(GTK_ENTRY(s->title_entry), "Task title");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(s->title_entry), "Add new task (Ctrl+N)");
+    g_signal_connect(s->title_entry, "changed", G_CALLBACK(on_title_entry_changed), s);
     g_signal_connect(s->title_entry, "activate", G_CALLBACK(on_entry_activate), s);
     gtk_box_append(GTK_BOX(box), s->title_entry);
 
@@ -1210,10 +1295,11 @@ static GtkWidget* build_stats_view(AppState* s) {
     GtkWidget* wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_vexpand(wrap, TRUE);
 
-    GtkWidget* filter_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    GtkWidget* filter_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 
     GtkWidget* seg = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 3);
     gtk_widget_add_css_class(seg, "tk-seg");
+    gtk_box_set_homogeneous(GTK_BOX(seg), TRUE);
     const char* scope_names[4] = {"Range", "Day", "Month", "Year"};
     for (int i = 0; i < 4; ++i) {
         GtkWidget* b = gtk_button_new_with_label(scope_names[i]);
@@ -1224,9 +1310,10 @@ static GtkWidget* build_stats_view(AppState* s) {
         s->scope_btn[i] = b;
         gtk_box_append(GTK_BOX(seg), b);
     }
+    gtk_box_append(GTK_BOX(filter_box), seg);
 
-    GtkWidget* spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_hexpand(spacer, TRUE);
+    GtkWidget* nav_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_widget_set_halign(nav_row, GTK_ALIGN_CENTER);
 
     s->period_nav_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
     GtkWidget* prev_btn = gtk_button_new_from_icon_name("go-previous-symbolic");
@@ -1256,18 +1343,18 @@ static GtkWidget* build_stats_view(AppState* s) {
     gtk_box_append(GTK_BOX(s->range_bar), dash);
     gtk_box_append(GTK_BOX(s->range_bar), s->to_menu_btn);
 
-    gtk_box_append(GTK_BOX(filter_row), seg);
-    gtk_box_append(GTK_BOX(filter_row), spacer);
-    gtk_box_append(GTK_BOX(filter_row), s->period_nav_box);
-    gtk_box_append(GTK_BOX(filter_row), s->range_bar);
-    gtk_box_append(GTK_BOX(wrap), filter_row);
+    gtk_box_append(GTK_BOX(nav_row), s->period_nav_box);
+    gtk_box_append(GTK_BOX(nav_row), s->range_bar);
+    gtk_box_append(GTK_BOX(filter_box), nav_row);
+
+    gtk_box_append(GTK_BOX(wrap), filter_box);
 
     GtkWidget* card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(card, "tk-stat-card");
 
     s->pie_area = gtk_drawing_area_new();
-    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(s->pie_area), 380);
-    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(s->pie_area), 220);
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(s->pie_area), 260);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(s->pie_area), 170);
     gtk_widget_set_halign(s->pie_area, GTK_ALIGN_CENTER);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(s->pie_area), draw_pie_chart, s, nullptr);
     gtk_box_append(GTK_BOX(card), s->pie_area);
@@ -1330,50 +1417,6 @@ static GtkWidget* build_stats_view(AppState* s) {
     return wrap;
 }
 
-static GtkWidget* build_sidebar(AppState* s) {
-    GtkWidget* sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_add_css_class(sidebar, "tk-sidebar");
-    gtk_widget_set_size_request(sidebar, 195, -1);
-    gtk_widget_set_vexpand(sidebar, TRUE);
-
-    struct Item { const char* icon; const char* label; bool has_count; };
-    const Item items[3] = {
-        {"view-list-symbolic",      "Tasks",        true},
-        {"emblem-ok-symbolic",      "Achievements", true},
-        {"view-pie-chart-symbolic", "Statistics",   false},
-    };
-
-    for (int i = 0; i < 3; ++i) {
-        GtkWidget* btn = gtk_button_new();
-        gtk_widget_add_css_class(btn, "tk-nav");
-        g_object_set_data(G_OBJECT(btn), "nav-idx",
-                          reinterpret_cast<gpointer>(static_cast<intptr_t>(i)));
-        g_signal_connect(btn, "clicked", G_CALLBACK(on_nav_clicked), s);
-
-        GtkWidget* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 9);
-        GtkWidget* icon = gtk_image_new_from_icon_name(items[i].icon);
-        gtk_image_set_pixel_size(GTK_IMAGE(icon), 15);
-        GtkWidget* lbl = gtk_label_new(items[i].label);
-        gtk_label_set_xalign(GTK_LABEL(lbl), 0.0f);
-        gtk_widget_set_hexpand(lbl, TRUE);
-
-        gtk_box_append(GTK_BOX(row), icon);
-        gtk_box_append(GTK_BOX(row), lbl);
-
-        if (items[i].has_count) {
-            GtkWidget* cnt = gtk_label_new("0");
-            gtk_widget_add_css_class(cnt, "tk-nav-count");
-            gtk_box_append(GTK_BOX(row), cnt);
-            s->nav_count[i] = cnt;
-        }
-
-        gtk_button_set_child(GTK_BUTTON(btn), row);
-        s->nav_btn[i] = btn;
-        gtk_box_append(GTK_BOX(sidebar), btn);
-    }
-    return sidebar;
-}
-
 static void on_quit_action(GSimpleAction*, GVariant*, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     g_application_release(G_APPLICATION(s->app));
@@ -1403,48 +1446,192 @@ static void build_window(AppState* s) {
     s->window = gtk_application_window_new(s->app);
     gtk_widget_add_css_class(s->window, "tk-window");
     gtk_window_set_title(GTK_WINDOW(s->window), "Task Killer");
-    gtk_window_set_default_size(GTK_WINDOW(s->window), 820, 600);
-    gtk_widget_set_size_request(s->window, 650, 500);
+    gtk_window_set_default_size(GTK_WINDOW(s->window), 860, 600);
+    gtk_widget_set_size_request(s->window, 560, 480);
     gtk_window_set_hide_on_close(GTK_WINDOW(s->window), TRUE);
 
     GtkWidget* header = gtk_header_bar_new();
     gtk_widget_add_css_class(header, "tk-header");
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
 
+    // Toggle 3 garis (hamburger menu) di kiri atas
+    s->menu_btn = gtk_menu_button_new();
+    gtk_widget_add_css_class(s->menu_btn, "tk-nav-menu-btn");
+    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s->menu_btn), "open-menu-symbolic");
+    gtk_widget_set_tooltip_text(s->menu_btn, "Menu (Achievements & Statistics)");
+
+    s->menu_popover = gtk_popover_new();
+    gtk_widget_add_css_class(s->menu_popover, "tk-popover");
+
+    GtkWidget* menu_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_margin_start(menu_box, 6);
+    gtk_widget_set_margin_end(menu_box, 6);
+    gtk_widget_set_margin_top(menu_box, 6);
+    gtk_widget_set_margin_bottom(menu_box, 6);
+
+    s->menu_achiev_btn = gtk_button_new();
+    gtk_widget_add_css_class(s->menu_achiev_btn, "tk-menu-item-btn");
+    GtkWidget* achiev_btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* achiev_icon = gtk_image_new_from_icon_name("emblem-ok-symbolic");
+    GtkWidget* achiev_lbl = gtk_label_new("Achievements");
+    gtk_box_append(GTK_BOX(achiev_btn_box), achiev_icon);
+    gtk_box_append(GTK_BOX(achiev_btn_box), achiev_lbl);
+    gtk_button_set_child(GTK_BUTTON(s->menu_achiev_btn), achiev_btn_box);
+    g_signal_connect(s->menu_achiev_btn, "clicked", G_CALLBACK(on_menu_achiev_clicked), s);
+
+    s->menu_stats_btn = gtk_button_new();
+    gtk_widget_add_css_class(s->menu_stats_btn, "tk-menu-item-btn");
+    GtkWidget* stats_btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    GtkWidget* stats_icon = gtk_image_new_from_icon_name("utilities-system-monitor-symbolic");
+    GtkWidget* stats_lbl = gtk_label_new("Statistics");
+    gtk_box_append(GTK_BOX(stats_btn_box), stats_icon);
+    gtk_box_append(GTK_BOX(stats_btn_box), stats_lbl);
+    gtk_button_set_child(GTK_BUTTON(s->menu_stats_btn), stats_btn_box);
+    g_signal_connect(s->menu_stats_btn, "clicked", G_CALLBACK(on_menu_stats_clicked), s);
+
+    gtk_box_append(GTK_BOX(menu_box), s->menu_achiev_btn);
+    gtk_box_append(GTK_BOX(menu_box), s->menu_stats_btn);
+    gtk_popover_set_child(GTK_POPOVER(s->menu_popover), menu_box);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(s->menu_btn), s->menu_popover);
+    gtk_header_bar_pack_start(GTK_HEADER_BAR(header), s->menu_btn);
+
     GtkWidget* app_title = gtk_label_new("Task Killer");
     gtk_widget_add_css_class(app_title, "tk-app-title");
     gtk_header_bar_set_title_widget(GTK_HEADER_BAR(header), app_title);
 
-    s->add_menu_btn = gtk_menu_button_new();
-    gtk_widget_add_css_class(s->add_menu_btn, "tk-add-btn");
-    gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s->add_menu_btn), "list-add-symbolic");
-    gtk_widget_set_tooltip_text(s->add_menu_btn, "Add task (Ctrl+N)");
-    s->add_popover = build_add_popover(s);
-    gtk_menu_button_set_popover(GTK_MENU_BUTTON(s->add_menu_btn), s->add_popover);
-    gtk_header_bar_pack_end(GTK_HEADER_BAR(header), s->add_menu_btn);
-
     gtk_window_set_titlebar(GTK_WINDOW(s->window), header);
 
-    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_append(GTK_BOX(root), build_sidebar(s));
+    // Main 2-column container: Left = collapsible side panel (Achievements/Stats), Right = Active Tasks (spacious)
+    GtkWidget* main_container = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(main_container, TRUE);
+    gtk_widget_set_vexpand(main_container, TRUE);
 
-    GtkWidget* right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-    gtk_widget_set_hexpand(right, TRUE);
-    gtk_widget_set_vexpand(right, TRUE);
-    gtk_widget_set_margin_start(right, 22);
-    gtk_widget_set_margin_end(right, 22);
-    gtk_widget_set_margin_top(right, 8);
-    gtk_widget_set_margin_bottom(right, 16);
+    // --- Left side panel (Drawer for Achievements and Statistics) ---
+    s->side_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_add_css_class(s->side_panel, "tk-side-panel");
+    gtk_widget_set_size_request(s->side_panel, 310, -1);
+    gtk_widget_set_vexpand(s->side_panel, TRUE);
+    gtk_widget_set_visible(s->side_panel, FALSE); // Collapsed by default
+
+    // Side panel header with title and close button
+    GtkWidget* side_hdr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_add_css_class(side_hdr, "tk-side-hdr");
+
+    s->side_title = gtk_label_new("Details");
+    gtk_widget_add_css_class(s->side_title, "tk-side-title");
+    gtk_label_set_xalign(GTK_LABEL(s->side_title), 0.0f);
+    gtk_widget_set_hexpand(s->side_title, TRUE);
+
+    s->side_close_btn = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_widget_add_css_class(s->side_close_btn, "tk-side-close");
+    gtk_widget_set_tooltip_text(s->side_close_btn, "Close panel");
+    g_signal_connect(s->side_close_btn, "clicked", G_CALLBACK(on_side_close_clicked), s);
+
+    gtk_box_append(GTK_BOX(side_hdr), s->side_title);
+    gtk_box_append(GTK_BOX(side_hdr), s->side_close_btn);
+    gtk_box_append(GTK_BOX(s->side_panel), side_hdr);
+
+    // Side panel stack containing Achievements & Statistics views
+    s->side_stack = gtk_stack_new();
+    gtk_widget_set_vexpand(s->side_stack, TRUE);
+    gtk_widget_set_hexpand(s->side_stack, TRUE);
+
+    // 1. Achievements view in stack
+    GtkWidget* achiev_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(achiev_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(achiev_scroll, TRUE);
+    GtkWidget* achiev_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    s->achiev_list_box = gtk_list_box_new();
+    gtk_widget_add_css_class(s->achiev_list_box, "tk-list");
+    gtk_list_box_set_selection_mode(GTK_LIST_BOX(s->achiev_list_box), GTK_SELECTION_NONE);
+
+    s->achiev_empty_label = gtk_label_new("No achievements yet");
+    gtk_widget_add_css_class(s->achiev_empty_label, "tk-empty");
+
+    gtk_box_append(GTK_BOX(achiev_box), s->achiev_list_box);
+    gtk_box_append(GTK_BOX(achiev_box), s->achiev_empty_label);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(achiev_scroll), achiev_box);
+    gtk_stack_add_named(GTK_STACK(s->side_stack), achiev_scroll, "achiev");
+
+    // 2. Statistics view in stack
+    GtkWidget* stats_scroll = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(stats_scroll),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(stats_scroll, TRUE);
+    GtkWidget* stats_view = build_stats_view(s);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(stats_scroll), stats_view);
+    gtk_stack_add_named(GTK_STACK(s->side_stack), stats_scroll, "stats");
+
+    gtk_box_append(GTK_BOX(s->side_panel), s->side_stack);
+    gtk_box_append(GTK_BOX(main_container), s->side_panel);
+
+    // --- Right side: Tasks column (spacious, wide & high) ---
+    GtkWidget* right_column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_set_hexpand(right_column, TRUE);
+    gtk_widget_set_vexpand(right_column, TRUE);
+    gtk_widget_set_margin_start(right_column, 20);
+    gtk_widget_set_margin_end(right_column, 20);
+    gtk_widget_set_margin_top(right_column, 12);
+    gtk_widget_set_margin_bottom(right_column, 16);
+
+    // Tasks title row with count
+    GtkWidget* title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_valign(title_box, GTK_ALIGN_CENTER);
 
     s->view_title = gtk_label_new("Tasks");
     gtk_widget_add_css_class(s->view_title, "tk-view-title");
     gtk_label_set_xalign(GTK_LABEL(s->view_title), 0.0f);
-    gtk_box_append(GTK_BOX(right), s->view_title);
 
-    s->list_scroller = gtk_scrolled_window_new();
-    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(s->list_scroller),
+    s->view_count_lbl = gtk_label_new("(0)");
+    gtk_widget_add_css_class(s->view_count_lbl, "tk-view-count");
+    gtk_widget_set_valign(s->view_count_lbl, GTK_ALIGN_BASELINE_FILL);
+
+    gtk_box_append(GTK_BOX(title_box), s->view_title);
+    gtk_box_append(GTK_BOX(title_box), s->view_count_lbl);
+    gtk_box_append(GTK_BOX(right_column), title_box);
+
+    // --- Add task banner below title ---
+    s->add_menu_btn = gtk_menu_button_new();
+    gtk_widget_add_css_class(s->add_menu_btn, "tk-add-banner-btn");
+    gtk_widget_set_hexpand(s->add_menu_btn, TRUE);
+    gtk_widget_set_tooltip_text(s->add_menu_btn, "Add task (Ctrl+N)");
+
+    GtkWidget* add_row_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_widget_set_valign(add_row_box, GTK_ALIGN_CENTER);
+
+    GtkWidget* plus_icon = gtk_image_new_from_icon_name("list-add-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(plus_icon), 14);
+    GtkWidget* plus_badge = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(plus_badge, "tk-add-plus-badge");
+    gtk_widget_set_valign(plus_badge, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(plus_badge), plus_icon);
+    gtk_box_append(GTK_BOX(add_row_box), plus_badge);
+
+    s->add_placeholder_lbl = gtk_label_new("Add new task");
+    gtk_widget_add_css_class(s->add_placeholder_lbl, "tk-add-placeholder");
+    gtk_label_set_xalign(GTK_LABEL(s->add_placeholder_lbl), 0.0f);
+    gtk_box_append(GTK_BOX(add_row_box), s->add_placeholder_lbl);
+
+    s->add_shortcut_lbl = gtk_label_new("Ctrl+N");
+    gtk_widget_add_css_class(s->add_shortcut_lbl, "tk-add-shortcut");
+    gtk_box_append(GTK_BOX(add_row_box), s->add_shortcut_lbl);
+
+    GtkWidget* add_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(add_spacer, TRUE);
+    gtk_box_append(GTK_BOX(add_row_box), add_spacer);
+
+    gtk_menu_button_set_child(GTK_MENU_BUTTON(s->add_menu_btn), add_row_box);
+    s->add_popover = build_add_popover(s);
+    gtk_menu_button_set_popover(GTK_MENU_BUTTON(s->add_menu_btn), s->add_popover);
+    gtk_box_append(GTK_BOX(right_column), s->add_menu_btn);
+
+    // Active tasks scrolled list (takes maximum width and height)
+    GtkWidget* tasks_scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(tasks_scroller),
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-    gtk_widget_set_vexpand(s->list_scroller, TRUE);
+    gtk_widget_set_vexpand(tasks_scroller, TRUE);
+    gtk_widget_set_hexpand(tasks_scroller, TRUE);
 
     GtkWidget* list_wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     s->list_box = gtk_list_box_new();
@@ -1456,15 +1643,11 @@ static void build_window(AppState* s) {
 
     gtk_box_append(GTK_BOX(list_wrap), s->list_box);
     gtk_box_append(GTK_BOX(list_wrap), s->empty_label);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(s->list_scroller), list_wrap);
-    gtk_box_append(GTK_BOX(right), s->list_scroller);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(tasks_scroller), list_wrap);
+    gtk_box_append(GTK_BOX(right_column), tasks_scroller);
 
-    s->stats_box = build_stats_view(s);
-    gtk_widget_set_visible(s->stats_box, FALSE);
-    gtk_box_append(GTK_BOX(right), s->stats_box);
-
-    gtk_box_append(GTK_BOX(root), right);
-    gtk_window_set_child(GTK_WINDOW(s->window), root);
+    gtk_box_append(GTK_BOX(main_container), right_column);
+    gtk_window_set_child(GTK_WINDOW(s->window), main_container);
 
     g_application_hold(G_APPLICATION(s->app));
     g_timeout_add_seconds(5, on_timer_tick, s);
