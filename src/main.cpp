@@ -26,10 +26,12 @@ struct AppState {
     GtkWidget* list_box = nullptr;
     GtkWidget* view_title = nullptr;
     GtkWidget* view_count_lbl = nullptr;
-    GtkWidget* empty_label = nullptr;
-    GtkWidget* add_menu_btn = nullptr;
-    GtkWidget* add_popover = nullptr;
+    GtkWidget* add_card = nullptr;
+    GtkWidget* add_hint_lbl = nullptr;
+    GtkWidget* add_revealer = nullptr;
+    bool add_expanded = false;
     GtkWidget* title_entry = nullptr;
+    GtkWidget* detail_view = nullptr;
     GtkWidget* seg_btn[3]{};
     GtkWidget* seg_val[3]{};
     GtkWidget* calendar = nullptr;
@@ -44,10 +46,6 @@ struct AppState {
     GtkWidget* menu_popover = nullptr;
     GtkWidget* menu_achiev_btn = nullptr;
     GtkWidget* menu_stats_btn = nullptr;
-
-    // Add task banner labels
-    GtkWidget* add_placeholder_lbl = nullptr;
-    GtkWidget* add_shortcut_lbl = nullptr;
 
     // Collapsible side drawer on the left for Achievements & Statistics
     GtkWidget* side_panel = nullptr;
@@ -93,6 +91,9 @@ struct AppState {
     double drag_y0 = 0.0;
 
     std::string active_side_page; // empty when closed, "achiev" or "stats"
+    std::string draft_title;
+    std::string draft_detail;
+    bool has_draft_times = false;
     tk::Store store;
 };
 
@@ -285,6 +286,14 @@ static void on_check_toggled(GtkCheckButton* btn, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     if (!gtk_check_button_get_active(btn)) return;
     long id = widget_task_id(GTK_WIDGET(btn));
+    const tk::Task* t = s->store.find(id);
+    if (t) {
+        time_t now = std::time(nullptr);
+        // Play complete sound only if completed on time (before or at deadline)
+        if (now <= t->deadline_at) {
+            tk::play_complete_sound();
+        }
+    }
     s->store.set_status(id, tk::Status::Achieved);
     refresh_ui(s);
 }
@@ -297,6 +306,23 @@ static void on_delete_clicked(GtkButton* btn, gpointer user_data) {
         s->store.set_status(id, tk::Status::Trash);
     } else {
         s->store.remove_permanently(id);
+    }
+    refresh_ui(s);
+}
+
+static void on_subtask_toggled(GtkCheckButton* btn, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    long task_id = reinterpret_cast<intptr_t>(g_object_get_data(G_OBJECT(btn), "sub-task-id"));
+    size_t sub_idx = static_cast<size_t>(reinterpret_cast<intptr_t>(g_object_get_data(G_OBJECT(btn), "sub-idx")));
+    bool is_active = gtk_check_button_get_active(btn);
+
+    const tk::Task* t = s->store.find(task_id);
+    bool main_completed = s->store.set_subtask_done(task_id, sub_idx, is_active);
+    if (main_completed && t) {
+        time_t now = std::time(nullptr);
+        if (now <= t->deadline_at) {
+            tk::play_complete_sound();
+        }
     }
     refresh_ui(s);
 }
@@ -318,12 +344,56 @@ static GtkWidget* build_task_row(AppState* s, const tk::Task& t) {
     }
     gtk_box_append(GTK_BOX(row_box), check);
 
+    GtkWidget* text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+    gtk_widget_set_hexpand(text_box, TRUE);
+
     GtkWidget* title = gtk_label_new(t.title.c_str());
     gtk_widget_add_css_class(title, "tk-task-title");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(title, TRUE);
-    gtk_box_append(GTK_BOX(row_box), title);
+    gtk_box_append(GTK_BOX(text_box), title);
+
+    if (!t.subtasks.empty()) {
+        GtkWidget* subs_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        gtk_widget_set_margin_top(subs_box, 2);
+        for (size_t i = 0; i < t.subtasks.size(); ++i) {
+            const auto& sub = t.subtasks[i];
+            GtkWidget* sub_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+            gtk_widget_add_css_class(sub_row, "tk-subtask-row");
+
+            GtkWidget* sub_chk = gtk_check_button_new();
+            gtk_widget_add_css_class(sub_chk, "tk-sub-check");
+            gtk_check_button_set_active(GTK_CHECK_BUTTON(sub_chk), sub.done);
+            if (t.status == tk::Status::Achieved) {
+                gtk_widget_set_can_target(sub_chk, FALSE);
+            } else {
+                g_object_set_data(G_OBJECT(sub_chk), "sub-task-id", reinterpret_cast<gpointer>(static_cast<intptr_t>(t.id)));
+                g_object_set_data(G_OBJECT(sub_chk), "sub-idx", reinterpret_cast<gpointer>(static_cast<intptr_t>(i)));
+                g_signal_connect(sub_chk, "toggled", G_CALLBACK(on_subtask_toggled), s);
+            }
+            gtk_box_append(GTK_BOX(sub_row), sub_chk);
+
+            GtkWidget* sub_lbl = gtk_label_new(sub.title.c_str());
+            gtk_widget_add_css_class(sub_lbl, "tk-sub-title");
+            if (sub.done) {
+                gtk_widget_add_css_class(sub_lbl, "done");
+            }
+            gtk_label_set_xalign(GTK_LABEL(sub_lbl), 0.0f);
+            gtk_label_set_ellipsize(GTK_LABEL(sub_lbl), PANGO_ELLIPSIZE_END);
+            gtk_box_append(GTK_BOX(sub_row), sub_lbl);
+
+            gtk_box_append(GTK_BOX(subs_box), sub_row);
+        }
+        gtk_box_append(GTK_BOX(text_box), subs_box);
+    } else if (!t.detail.empty()) {
+        GtkWidget* detail_lbl = gtk_label_new(t.detail.c_str());
+        gtk_widget_add_css_class(detail_lbl, "tk-task-detail");
+        gtk_label_set_xalign(GTK_LABEL(detail_lbl), 0.0f);
+        gtk_label_set_ellipsize(GTK_LABEL(detail_lbl), PANGO_ELLIPSIZE_END);
+        gtk_box_append(GTK_BOX(text_box), detail_lbl);
+    }
+
+    gtk_box_append(GTK_BOX(row_box), text_box);
 
     std::string hm = tk::format_hm(t.deadline_at);
     GtkWidget* deadline_lbl = gtk_label_new(hm.c_str());
@@ -615,12 +685,20 @@ static void sync_calendar_tm(GtkCalendar* cal, const std::tm& d) {
 
 static void refresh_stats_view(AppState* s) {
     int sc = static_cast<int>(s->stat_scope);
+    bool is_range = (s->stat_scope == tk::StatScope::Range);
+
     for (int i = 0; i < 4; ++i) {
         if (i == sc) gtk_widget_add_css_class(s->scope_btn[i], "active");
         else gtk_widget_remove_css_class(s->scope_btn[i], "active");
+
+        // When in Range mode, hide Day, Month, Year buttons and keep Range in the center
+        if (is_range) {
+            gtk_widget_set_visible(s->scope_btn[i], (i == 0));
+        } else {
+            gtk_widget_set_visible(s->scope_btn[i], TRUE);
+        }
     }
 
-    bool is_range = (s->stat_scope == tk::StatScope::Range);
     gtk_widget_set_visible(s->period_nav_box, !is_range);
     gtk_widget_set_visible(s->range_bar, is_range);
 
@@ -669,14 +747,11 @@ static void refresh_ui(AppState* s) {
 
     // Refresh active tasks list
     gtk_list_box_remove_all(GTK_LIST_BOX(s->list_box));
-    int visible_rows = 0;
     for (const auto& t : s->store.tasks) {
         if (t.status == tk::Status::Active) {
             gtk_list_box_append(GTK_LIST_BOX(s->list_box), build_task_row(s, t));
-            ++visible_rows;
         }
     }
-    gtk_widget_set_visible(s->empty_label, visible_rows == 0);
 
     // Update menu achievements item label with count
     int achiev_count = s->store.count(tk::Status::Achieved);
@@ -742,7 +817,12 @@ static void on_scope_clicked(GtkButton* btn, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     int idx = static_cast<int>(
         reinterpret_cast<intptr_t>(g_object_get_data(G_OBJECT(btn), "scope-idx")));
-    s->stat_scope = static_cast<tk::StatScope>(idx);
+    if (idx == 0 && s->stat_scope == tk::StatScope::Range) {
+        // Clicking Range again toggles back to Day view
+        s->stat_scope = tk::StatScope::Day;
+    } else {
+        s->stat_scope = static_cast<tk::StatScope>(idx);
+    }
     refresh_stats_view(s);
 }
 
@@ -1048,60 +1128,172 @@ static gboolean on_time_scroll(GtkEventControllerScroll* ctrl, double, double dy
     return TRUE;
 }
 
+static gboolean on_editor_key_pressed(GtkEventControllerKey*, guint keyval, guint, GdkModifierType, gpointer) {
+    // Ignore pure modifier presses
+    switch (keyval) {
+        case GDK_KEY_Shift_L: case GDK_KEY_Shift_R:
+        case GDK_KEY_Control_L: case GDK_KEY_Control_R:
+        case GDK_KEY_Alt_L: case GDK_KEY_Alt_R:
+        case GDK_KEY_Super_L: case GDK_KEY_Super_R:
+        case GDK_KEY_Caps_Lock: case GDK_KEY_Num_Lock:
+        case GDK_KEY_Meta_L: case GDK_KEY_Meta_R:
+        case GDK_KEY_ISO_Level3_Shift:
+            return FALSE;
+        default:
+            break;
+    }
+    tk::play_typing_sound();
+    return FALSE; // Allow default event processing
+}
+
 static void on_title_entry_changed(GtkEditable* editable, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
     const char* txt = gtk_editable_get_text(editable);
-    if (!txt || txt[0] == '\0') {
-        if (s->add_placeholder_lbl) {
-            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+    if (txt && txt[0] != '\0' && s->form_err) {
+        gtk_widget_set_visible(s->form_err, FALSE);
+    }
+    tk::play_typing_sound();
+}
+
+static void open_add_composer(AppState* s) {
+    if (!s->add_expanded) {
+        if (!s->has_draft_times) {
+            time_t now = std::time(nullptr);
+            now -= (now % 60);
+
+            s->draft_times[0] = now;
+            s->draft_times[1] = now + 3600;
+            s->draft_times[2] = now + 3600;
+            s->slot_touched[0] = false;
+            s->slot_touched[1] = false;
+            s->slot_touched[2] = false;
+            s->active_slot = 0;
+            s->editing_minute = false;
+            s->has_draft_times = true;
         }
-        if (s->add_shortcut_lbl) {
-            gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+
+        gtk_widget_set_visible(s->form_err, FALSE);
+        sync_picker_ui(s);
+
+        // Restore previously typed title & details if composer was closed accidentally
+        if (s->title_entry && !s->draft_title.empty()) {
+            const char* cur_txt = gtk_editable_get_text(GTK_EDITABLE(s->title_entry));
+            if (!cur_txt || cur_txt[0] == '\0') {
+                gtk_editable_set_text(GTK_EDITABLE(s->title_entry), s->draft_title.c_str());
+            }
         }
-    } else {
-        if (s->add_placeholder_lbl) {
-            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), txt);
+        if (s->detail_view && !s->draft_detail.empty()) {
+            GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+            GtkTextIter start_iter, end_iter;
+            gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
+            char* cur_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
+            if (!cur_text || cur_text[0] == '\0') {
+                gtk_text_buffer_set_text(buf, s->draft_detail.c_str(), -1);
+            }
+            if (cur_text) g_free(cur_text);
         }
-        if (s->add_shortcut_lbl) {
-            gtk_widget_set_visible(s->add_shortcut_lbl, FALSE);
+
+        s->add_expanded = true;
+        gtk_widget_add_css_class(s->add_card, "expanded");
+        gtk_widget_set_visible(s->add_revealer, TRUE);
+        gtk_revealer_set_reveal_child(GTK_REVEALER(s->add_revealer), TRUE);
+    }
+    if (s->add_hint_lbl) {
+        const char* cur_title = s->title_entry ? gtk_editable_get_text(GTK_EDITABLE(s->title_entry)) : "";
+        if (!cur_title || cur_title[0] == '\0') {
+            gtk_widget_set_visible(s->add_hint_lbl, FALSE);
+        } else {
+            gtk_widget_set_visible(s->add_hint_lbl, FALSE);
         }
+    }
+    gtk_widget_set_can_focus(s->title_entry, TRUE);
+    gtk_widget_grab_focus(s->title_entry);
+}
+
+static void close_add_composer(AppState* s, bool clear_draft = false) {
+    if (s->title_entry) {
+        const char* txt = gtk_editable_get_text(GTK_EDITABLE(s->title_entry));
+        s->draft_title = txt ? txt : "";
+    }
+    if (s->detail_view) {
+        GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+        GtkTextIter start_iter, end_iter;
+        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
+        char* text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
+        if (text) {
+            s->draft_detail = text;
+            g_free(text);
+        }
+    }
+
+    if (clear_draft) {
+        s->draft_title.clear();
+        s->draft_detail.clear();
+        s->has_draft_times = false;
+        if (s->title_entry) {
+            gtk_editable_set_text(GTK_EDITABLE(s->title_entry), "");
+        }
+        if (s->detail_view) {
+            GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+            gtk_text_buffer_set_text(buf, "", -1);
+        }
+    }
+
+    s->add_expanded = false;
+    gtk_widget_set_visible(s->form_err, FALSE);
+    gtk_widget_remove_css_class(s->add_card, "expanded");
+    gtk_revealer_set_reveal_child(GTK_REVEALER(s->add_revealer), FALSE);
+    if (s->add_hint_lbl) {
+        const char* txt = s->title_entry ? gtk_editable_get_text(GTK_EDITABLE(s->title_entry)) : "";
+        bool has_title = (txt && txt[0] != '\0');
+        gtk_widget_set_visible(s->add_hint_lbl, !has_title);
+    }
+    gtk_widget_set_can_focus(s->title_entry, FALSE);
+    if (s->window) {
+        gtk_window_set_focus(GTK_WINDOW(s->window), nullptr);
     }
 }
 
-static void on_popover_visible(GObject* obj, GParamSpec*, gpointer user_data) {
+static void on_add_revealer_done(GObject* obj, GParamSpec*, gpointer) {
+    GtkRevealer* rev = GTK_REVEALER(obj);
+    if (!gtk_revealer_get_reveal_child(rev) && !gtk_revealer_get_child_revealed(rev)) {
+        gtk_widget_set_visible(GTK_WIDGET(rev), FALSE);
+    }
+}
+
+static void on_add_banner_pressed(GtkGestureClick*, int, double, double, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
-    if (!gtk_widget_get_visible(GTK_WIDGET(obj))) {
-        if (s->add_placeholder_lbl) {
-            gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
-        }
-        if (s->add_shortcut_lbl) {
-            gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
-        }
+    if (!s->add_expanded) {
+        open_add_composer(s);
+    } else {
+        close_add_composer(s);
+    }
+}
+
+static void on_window_pressed(GtkGestureClick* gesture, int, double x, double y, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    tk::play_click_sound();
+
+    if (!s->add_expanded) return;
+    GtkWidget* win = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+    GtkWidget* picked = gtk_widget_pick(win, x, y, GTK_PICK_DEFAULT);
+    if (picked && (picked == s->add_card || gtk_widget_is_ancestor(picked, s->add_card))) {
         return;
     }
-
-    time_t now = std::time(nullptr);
-    now -= (now % 60);
-
-    s->draft_times[0] = now;
-    s->draft_times[1] = now + 3600;
-    s->draft_times[2] = now + 3600;
-    s->slot_touched[0] = false;
-    s->slot_touched[1] = false;
-    s->slot_touched[2] = false;
-    s->active_slot = 0;
-    s->editing_minute = false;
-
-    gtk_editable_set_text(GTK_EDITABLE(s->title_entry), "");
-    if (s->add_placeholder_lbl) {
-        gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
+    const char* txt = gtk_editable_get_text(GTK_EDITABLE(s->title_entry));
+    if (!txt || trim(txt).empty()) {
+        close_add_composer(s);
     }
-    if (s->add_shortcut_lbl) {
-        gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
+}
+
+static gboolean on_window_key_pressed(GtkEventControllerKey*, guint keyval, guint,
+                                      GdkModifierType, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    if (keyval == GDK_KEY_Escape && s->add_expanded) {
+        close_add_composer(s);
+        return TRUE;
     }
-    gtk_widget_set_visible(s->form_err, FALSE);
-    sync_picker_ui(s);
-    gtk_widget_grab_focus(s->title_entry);
+    return FALSE;
 }
 
 static void submit_add_task(AppState* s) {
@@ -1111,6 +1303,18 @@ static void submit_add_task(AppState* s) {
         gtk_widget_set_visible(s->form_err, TRUE);
         gtk_widget_grab_focus(s->title_entry);
         return;
+    }
+
+    std::string detail;
+    if (s->detail_view) {
+        GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+        GtkTextIter start_iter, end_iter;
+        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
+        char* text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
+        if (text) {
+            detail = trim(text);
+            g_free(text);
+        }
     }
 
     time_t start_at = s->draft_times[0];
@@ -1128,14 +1332,8 @@ static void submit_add_task(AppState* s) {
         return;
     }
 
-    s->store.add(title, start_at, deadline_at, expires_at);
-    gtk_popover_popdown(GTK_POPOVER(s->add_popover));
-    if (s->add_placeholder_lbl) {
-        gtk_label_set_text(GTK_LABEL(s->add_placeholder_lbl), "Add new task");
-    }
-    if (s->add_shortcut_lbl) {
-        gtk_widget_set_visible(s->add_shortcut_lbl, TRUE);
-    }
+    s->store.add(title, start_at, deadline_at, expires_at, detail);
+    close_add_composer(s, true); // Task created successfully, clear draft
     on_timer_tick(s);
     refresh_ui(s);
 }
@@ -1149,26 +1347,81 @@ static void on_entry_activate(GtkEntry*, gpointer user_data) {
 }
 
 static void on_cancel_clicked(GtkButton*, gpointer user_data) {
-    auto* s = static_cast<AppState*>(user_data);
-    gtk_popover_popdown(GTK_POPOVER(s->add_popover));
+    close_add_composer(static_cast<AppState*>(user_data));
 }
 
-static GtkWidget* build_add_popover(AppState* s) {
-    GtkWidget* pop = gtk_popover_new();
-    gtk_widget_add_css_class(pop, "tk-popover");
-    gtk_popover_set_autohide(GTK_POPOVER(pop), TRUE);
+static GtkWidget* build_add_composer(AppState* s) {
+    s->add_card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(s->add_card, "tk-add-card");
+    gtk_widget_set_hexpand(s->add_card, TRUE);
 
-    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    // --- Top row: [+] + inline title input with centered "Add New Task  Ctrl+N" ---
+    GtkWidget* top_overlay = gtk_overlay_new();
+    gtk_widget_set_hexpand(top_overlay, TRUE);
+
+    GtkWidget* top_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_valign(top_row, GTK_ALIGN_CENTER);
+
+    GtkWidget* plus_icon = gtk_image_new_from_icon_name("list-add-symbolic");
+    gtk_image_set_pixel_size(GTK_IMAGE(plus_icon), 14);
+    GtkWidget* plus_badge = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(plus_badge, "tk-add-plus-badge");
+    gtk_widget_set_valign(plus_badge, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(plus_badge), plus_icon);
+    gtk_box_append(GTK_BOX(top_row), plus_badge);
 
     s->title_entry = gtk_entry_new();
-    gtk_widget_add_css_class(s->title_entry, "tk-entry");
-    gtk_entry_set_placeholder_text(GTK_ENTRY(s->title_entry), "Add new task (Ctrl+N)");
+    gtk_widget_add_css_class(s->title_entry, "tk-add-inline-entry");
+    gtk_widget_set_hexpand(s->title_entry, TRUE);
+    gtk_widget_set_can_focus(s->title_entry, FALSE);
     g_signal_connect(s->title_entry, "changed", G_CALLBACK(on_title_entry_changed), s);
     g_signal_connect(s->title_entry, "activate", G_CALLBACK(on_entry_activate), s);
-    gtk_box_append(GTK_BOX(box), s->title_entry);
+    GtkEventController* title_key_ctrl = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(title_key_ctrl, GTK_PHASE_CAPTURE);
+    g_signal_connect(title_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+    gtk_widget_add_controller(s->title_entry, title_key_ctrl);
+    GtkEditable* title_delegate = gtk_editable_get_delegate(GTK_EDITABLE(s->title_entry));
+    if (title_delegate) {
+        GtkEventController* del_key_ctrl = gtk_event_controller_key_new();
+        gtk_event_controller_set_propagation_phase(del_key_ctrl, GTK_PHASE_CAPTURE);
+        g_signal_connect(del_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+        gtk_widget_add_controller(GTK_WIDGET(title_delegate), del_key_ctrl);
+    }
+    gtk_box_append(GTK_BOX(top_row), s->title_entry);
+
+    gtk_overlay_set_child(GTK_OVERLAY(top_overlay), top_row);
+
+    s->add_hint_lbl = gtk_label_new("Add New Task  Ctrl+N");
+    gtk_widget_add_css_class(s->add_hint_lbl, "tk-add-hint");
+    gtk_widget_set_halign(s->add_hint_lbl, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(s->add_hint_lbl, GTK_ALIGN_CENTER);
+    gtk_widget_set_can_target(s->add_hint_lbl, FALSE);
+    gtk_overlay_add_overlay(GTK_OVERLAY(top_overlay), s->add_hint_lbl);
+
+    GtkGesture* banner_click = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(banner_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(banner_click, "pressed", G_CALLBACK(on_add_banner_pressed), s);
+    gtk_widget_add_controller(top_overlay, GTK_EVENT_CONTROLLER(banner_click));
+
+    gtk_box_append(GTK_BOX(s->add_card), top_overlay);
+
+    // --- Expandable schedule panel merged inside the same card ---
+    s->add_revealer = gtk_revealer_new();
+    gtk_revealer_set_transition_type(GTK_REVEALER(s->add_revealer), GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+    gtk_revealer_set_transition_duration(GTK_REVEALER(s->add_revealer), 150);
+    gtk_revealer_set_reveal_child(GTK_REVEALER(s->add_revealer), FALSE);
+    gtk_widget_set_visible(s->add_revealer, FALSE);
+    g_signal_connect(s->add_revealer, "notify::child-revealed", G_CALLBACK(on_add_revealer_done), s);
+
+    GtkWidget* details_wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_add_css_class(details_wrap, "tk-add-details");
+
+    GtkWidget* details_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_hexpand(details_box, TRUE);
 
     GtkWidget* seg_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
     gtk_widget_add_css_class(seg_box, "tk-seg");
+    gtk_widget_set_hexpand(seg_box, TRUE);
     gtk_box_set_homogeneous(GTK_BOX(seg_box), TRUE);
     const char* seg_names[3] = {"Start", "Deadline", "Expires"};
     for (int i = 0; i < 3; ++i) {
@@ -1191,14 +1444,47 @@ static GtkWidget* build_add_popover(AppState* s) {
         s->seg_val[i] = vl;
         gtk_box_append(GTK_BOX(seg_box), btn);
     }
-    gtk_box_append(GTK_BOX(box), seg_box);
+    gtk_box_append(GTK_BOX(details_box), seg_box);
 
+    // Main body: Left side is task details (notes/description), Right side is clock & calendar
+    GtkWidget* body_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 14);
+    gtk_widget_set_hexpand(body_row, TRUE);
+
+    // --- Left column: Details (subtasks checklist) ---
+    GtkWidget* left_desc_col = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_widget_set_hexpand(left_desc_col, TRUE);
+
+    GtkWidget* desc_lbl = gtk_label_new("Details");
+    gtk_widget_add_css_class(desc_lbl, "tk-detail-field-title");
+    gtk_label_set_xalign(GTK_LABEL(desc_lbl), 0.0f);
+    gtk_box_append(GTK_BOX(left_desc_col), desc_lbl);
+
+    GtkWidget* desc_scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(desc_scroller),
+                                   GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_vexpand(desc_scroller, TRUE);
+    gtk_widget_set_hexpand(desc_scroller, TRUE);
+    gtk_widget_set_size_request(desc_scroller, 180, 190);
+
+    s->detail_view = gtk_text_view_new();
+    gtk_widget_add_css_class(s->detail_view, "tk-detail-entry");
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(s->detail_view), GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_accepts_tab(GTK_TEXT_VIEW(s->detail_view), FALSE);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(s->detail_view), 8);
+    gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(s->detail_view), 8);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(s->detail_view), 10);
+    gtk_text_view_set_right_margin(GTK_TEXT_VIEW(s->detail_view), 10);
+    GtkEventController* detail_key_ctrl = gtk_event_controller_key_new();
+    g_signal_connect(detail_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+    gtk_widget_add_controller(s->detail_view, detail_key_ctrl);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(desc_scroller), s->detail_view);
+    gtk_box_append(GTK_BOX(left_desc_col), desc_scroller);
+
+    gtk_box_append(GTK_BOX(body_row), left_desc_col);
+
+    // --- Right column: Clock & Calendar moved to the right ---
     GtkWidget* picker_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-
-    s->calendar = gtk_calendar_new();
-    gtk_widget_add_css_class(s->calendar, "tk-cal");
-    g_signal_connect(s->calendar, "day-selected", G_CALLBACK(on_calendar_day_selected), s);
-    gtk_box_append(GTK_BOX(picker_row), s->calendar);
+    gtk_widget_set_halign(picker_row, GTK_ALIGN_END);
 
     GtkWidget* clock_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_widget_add_css_class(clock_box, "tk-clock-box");
@@ -1237,8 +1523,8 @@ static GtkWidget* build_add_popover(AppState* s) {
     gtk_box_append(GTK_BOX(clock_box), time_hdr);
 
     s->clock_area = gtk_drawing_area_new();
-    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(s->clock_area), 152);
-    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(s->clock_area), 152);
+    gtk_drawing_area_set_content_width(GTK_DRAWING_AREA(s->clock_area), 146);
+    gtk_drawing_area_set_content_height(GTK_DRAWING_AREA(s->clock_area), 146);
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(s->clock_area), draw_clock_face, s, nullptr);
 
     GtkGesture* drag = gtk_gesture_drag_new();
@@ -1249,13 +1535,20 @@ static GtkWidget* build_add_popover(AppState* s) {
 
     gtk_box_append(GTK_BOX(clock_box), s->clock_area);
     gtk_box_append(GTK_BOX(picker_row), clock_box);
-    gtk_box_append(GTK_BOX(box), picker_row);
+
+    s->calendar = gtk_calendar_new();
+    gtk_widget_add_css_class(s->calendar, "tk-cal");
+    g_signal_connect(s->calendar, "day-selected", G_CALLBACK(on_calendar_day_selected), s);
+    gtk_box_append(GTK_BOX(picker_row), s->calendar);
+
+    gtk_box_append(GTK_BOX(body_row), picker_row);
+    gtk_box_append(GTK_BOX(details_box), body_row);
 
     s->form_err = gtk_label_new("");
     gtk_widget_add_css_class(s->form_err, "tk-form-err");
     gtk_label_set_xalign(GTK_LABEL(s->form_err), 0.0f);
     gtk_widget_set_visible(s->form_err, FALSE);
-    gtk_box_append(GTK_BOX(box), s->form_err);
+    gtk_box_append(GTK_BOX(details_box), s->form_err);
 
     GtkWidget* actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     gtk_widget_set_halign(actions, GTK_ALIGN_END);
@@ -1270,11 +1563,13 @@ static GtkWidget* build_add_popover(AppState* s) {
 
     gtk_box_append(GTK_BOX(actions), cancel_btn);
     gtk_box_append(GTK_BOX(actions), add_btn);
-    gtk_box_append(GTK_BOX(box), actions);
+    gtk_box_append(GTK_BOX(details_box), actions);
 
-    gtk_popover_set_child(GTK_POPOVER(pop), box);
-    g_signal_connect(pop, "notify::visible", G_CALLBACK(on_popover_visible), s);
-    return pop;
+    gtk_box_append(GTK_BOX(details_wrap), details_box);
+    gtk_revealer_set_child(GTK_REVEALER(s->add_revealer), details_wrap);
+    gtk_box_append(GTK_BOX(s->add_card), s->add_revealer);
+
+    return s->add_card;
 }
 
 static GtkWidget* make_date_picker_btn(GtkWidget*& popover_out, GtkWidget*& cal_out,
@@ -1425,7 +1720,11 @@ static void on_quit_action(GSimpleAction*, GVariant*, gpointer user_data) {
 
 static void on_new_task_action(GSimpleAction*, GVariant*, gpointer user_data) {
     auto* s = static_cast<AppState*>(user_data);
-    gtk_menu_button_popup(GTK_MENU_BUTTON(s->add_menu_btn));
+    if (!s->add_expanded) {
+        open_add_composer(s);
+    } else {
+        close_add_composer(s);
+    }
 }
 
 static void build_window(AppState* s) {
@@ -1450,15 +1749,23 @@ static void build_window(AppState* s) {
     gtk_widget_set_size_request(s->window, 560, 480);
     gtk_window_set_hide_on_close(GTK_WINDOW(s->window), TRUE);
 
+    GtkGesture* win_click = gtk_gesture_click_new();
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(win_click), GTK_PHASE_CAPTURE);
+    g_signal_connect(win_click, "pressed", G_CALLBACK(on_window_pressed), s);
+    gtk_widget_add_controller(s->window, GTK_EVENT_CONTROLLER(win_click));
+
+    GtkEventController* win_key = gtk_event_controller_key_new();
+    g_signal_connect(win_key, "key-pressed", G_CALLBACK(on_window_key_pressed), s);
+    gtk_widget_add_controller(s->window, win_key);
+
     GtkWidget* header = gtk_header_bar_new();
     gtk_widget_add_css_class(header, "tk-header");
     gtk_header_bar_set_show_title_buttons(GTK_HEADER_BAR(header), TRUE);
 
-    // Toggle 3 garis (hamburger menu) di kiri atas
+    // Toggle menu di kiri atas
     s->menu_btn = gtk_menu_button_new();
     gtk_widget_add_css_class(s->menu_btn, "tk-nav-menu-btn");
     gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(s->menu_btn), "open-menu-symbolic");
-    gtk_widget_set_tooltip_text(s->menu_btn, "Menu (Achievements & Statistics)");
 
     s->menu_popover = gtk_popover_new();
     gtk_widget_add_css_class(s->menu_popover, "tk-popover");
@@ -1484,8 +1791,10 @@ static void build_window(AppState* s) {
     GtkWidget* stats_btn_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
     GtkWidget* stats_icon = gtk_image_new_from_icon_name("utilities-system-monitor-symbolic");
     GtkWidget* stats_lbl = gtk_label_new("Statistics");
-    gtk_box_append(GTK_BOX(stats_btn_box), stats_icon);
+    gtk_widget_set_hexpand(stats_lbl, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(stats_lbl), 0.0f);
     gtk_box_append(GTK_BOX(stats_btn_box), stats_lbl);
+    gtk_box_append(GTK_BOX(stats_btn_box), stats_icon);
     gtk_button_set_child(GTK_BUTTON(s->menu_stats_btn), stats_btn_box);
     g_signal_connect(s->menu_stats_btn, "clicked", G_CALLBACK(on_menu_stats_clicked), s);
 
@@ -1591,40 +1900,8 @@ static void build_window(AppState* s) {
     gtk_box_append(GTK_BOX(title_box), s->view_count_lbl);
     gtk_box_append(GTK_BOX(right_column), title_box);
 
-    // --- Add task banner below title ---
-    s->add_menu_btn = gtk_menu_button_new();
-    gtk_widget_add_css_class(s->add_menu_btn, "tk-add-banner-btn");
-    gtk_widget_set_hexpand(s->add_menu_btn, TRUE);
-    gtk_widget_set_tooltip_text(s->add_menu_btn, "Add task (Ctrl+N)");
-
-    GtkWidget* add_row_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    gtk_widget_set_valign(add_row_box, GTK_ALIGN_CENTER);
-
-    GtkWidget* plus_icon = gtk_image_new_from_icon_name("list-add-symbolic");
-    gtk_image_set_pixel_size(GTK_IMAGE(plus_icon), 14);
-    GtkWidget* plus_badge = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_add_css_class(plus_badge, "tk-add-plus-badge");
-    gtk_widget_set_valign(plus_badge, GTK_ALIGN_CENTER);
-    gtk_box_append(GTK_BOX(plus_badge), plus_icon);
-    gtk_box_append(GTK_BOX(add_row_box), plus_badge);
-
-    s->add_placeholder_lbl = gtk_label_new("Add new task");
-    gtk_widget_add_css_class(s->add_placeholder_lbl, "tk-add-placeholder");
-    gtk_label_set_xalign(GTK_LABEL(s->add_placeholder_lbl), 0.0f);
-    gtk_box_append(GTK_BOX(add_row_box), s->add_placeholder_lbl);
-
-    s->add_shortcut_lbl = gtk_label_new("Ctrl+N");
-    gtk_widget_add_css_class(s->add_shortcut_lbl, "tk-add-shortcut");
-    gtk_box_append(GTK_BOX(add_row_box), s->add_shortcut_lbl);
-
-    GtkWidget* add_spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_widget_set_hexpand(add_spacer, TRUE);
-    gtk_box_append(GTK_BOX(add_row_box), add_spacer);
-
-    gtk_menu_button_set_child(GTK_MENU_BUTTON(s->add_menu_btn), add_row_box);
-    s->add_popover = build_add_popover(s);
-    gtk_menu_button_set_popover(GTK_MENU_BUTTON(s->add_menu_btn), s->add_popover);
-    gtk_box_append(GTK_BOX(right_column), s->add_menu_btn);
+    // --- Merged inline Add Task composer below title ---
+    gtk_box_append(GTK_BOX(right_column), build_add_composer(s));
 
     // Active tasks scrolled list (takes maximum width and height)
     GtkWidget* tasks_scroller = gtk_scrolled_window_new();
@@ -1633,17 +1910,11 @@ static void build_window(AppState* s) {
     gtk_widget_set_vexpand(tasks_scroller, TRUE);
     gtk_widget_set_hexpand(tasks_scroller, TRUE);
 
-    GtkWidget* list_wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
     s->list_box = gtk_list_box_new();
     gtk_widget_add_css_class(s->list_box, "tk-list");
     gtk_list_box_set_selection_mode(GTK_LIST_BOX(s->list_box), GTK_SELECTION_NONE);
 
-    s->empty_label = gtk_label_new("No tasks");
-    gtk_widget_add_css_class(s->empty_label, "tk-empty");
-
-    gtk_box_append(GTK_BOX(list_wrap), s->list_box);
-    gtk_box_append(GTK_BOX(list_wrap), s->empty_label);
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(tasks_scroller), list_wrap);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(tasks_scroller), s->list_box);
     gtk_box_append(GTK_BOX(right_column), tasks_scroller);
 
     gtk_box_append(GTK_BOX(main_container), right_column);
@@ -1661,6 +1932,9 @@ static void on_activate(GtkApplication*, gpointer user_data) {
     }
     refresh_ui(s);
     gtk_window_present(GTK_WINDOW(s->window));
+    if (!s->add_expanded) {
+        gtk_window_set_focus(GTK_WINDOW(s->window), nullptr);
+    }
 }
 
 } // namespace

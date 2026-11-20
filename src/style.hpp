@@ -7,125 +7,74 @@ constexpr const char* APP_CSS = R"CSS(
     font-family: "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
 }
 
+/* =========================================================================
+   Liquid Glass & Frosted Glass Design System (iOS 26 Translucency Adaption)
+   ========================================================================= */
+
 window.tk-window {
-    background-color: #0B0B0D;
+    background: radial-gradient(circle at 50% 0%, #16161D 0%, #0A0A0C 100%);
     color: #F5F5F7;
 }
 
 headerbar.tk-header {
-    background-color: #0B0B0D;
+    background-color: transparent;
     border: none;
     box-shadow: none;
     min-height: 44px;
     padding: 4px 12px 0 12px;
 }
 
-headerbar.tk-header windowcontrols button {
-    min-width: 24px;
-    min-height: 24px;
-    border-radius: 999px;
-    color: #8E8E93;
-    background: transparent;
-}
-
-headerbar.tk-header windowcontrols button:hover {
-    background-color: #2C2C2E;
-    color: #F5F5F7;
-}
-
 box.tk-sidebar {
-    background-color: #1C1C1E;
-    border-radius: 14px;
-    border: 1px solid #2A2A2D;
+    background-color: rgba(28, 28, 32, 0.72);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
     margin: 2px 0 12px 12px;
-    padding: 12px 8px;
+    padding: 14px 10px;
 }
 
 button.tk-nav {
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     box-shadow: none;
-    border-radius: 9px;
-    padding: 8px 10px;
-    margin: 1px 0;
-    color: #AEAEB2;
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin: 2px 0;
+    color: #A1A1A6;
     font-size: 13px;
     font-weight: 500;
+    transition: all 140ms ease;
 }
 
 button.tk-nav:hover {
-    background-color: #262629;
-    color: #F5F5F7;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #FFFFFF;
+    border-color: rgba(255, 255, 255, 0.06);
 }
 
 button.tk-nav.active {
-    background-color: #323236;
-    color: #F5F5F7;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.08) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #FFFFFF;
     font-weight: 600;
-}
-
-label.tk-nav-count {
-    font-size: 12px;
-    font-weight: 500;
-    color: #8E8E93;
-    font-variant-numeric: tabular-nums;
-}
-
-button.tk-nav.active label.tk-nav-count {
-    color: #D1D1D6;
-}
-
-label.tk-view-title {
-    font-size: 24px;
-    font-weight: 700;
-    letter-spacing: -0.02em;
-    color: #F5F5F7;
-}
-
-menubutton.tk-add-btn > button {
-    background-color: #2C2C2E;
-    color: #F5F5F7;
-    border: 1px solid #3A3A3D;
-    border-radius: 999px;
-    min-width: 30px;
-    min-height: 30px;
-    padding: 0 10px;
-    font-size: 17px;
-    font-weight: 400;
-    box-shadow: none;
-}
-
-menubutton.tk-add-btn > button:hover {
-    background-color: #3A3A3D;
-    border-color: #48484C;
-}
-
-list.tk-list {
-    background: transparent;
-}
-
-list.tk-list > row {
-    background: transparent;
-    padding: 3px 0;
-}
-
-list.tk-list > row:hover {
-    background: transparent;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
 box.tk-row {
-    background-color: #121215;
-    border: 1px solid #1C1C20;
-    border-radius: 12px;
-    padding: 12px 15px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    background: linear-gradient(180deg, rgba(32, 32, 38, 0.70) 0%, rgba(20, 20, 24, 0.65) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    transition: all 140ms ease;
 }
 
 box.tk-row:hover {
-    background-color: #17171C;
-    border-color: #26262C;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+    background: linear-gradient(180deg, rgba(40, 40, 48, 0.85) 0%, rgba(26, 26, 32, 0.80) 100%);
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
 checkbutton.tk-check check {
@@ -218,17 +167,18 @@ entry.tk-entry:focus-within {
 }
 
 box.tk-seg {
-    background-color: #161618;
-    border: 1px solid #2C2C30;
-    border-radius: 10px;
-    padding: 3px;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    padding: 2px 0;
 }
 
 button.tk-seg-btn {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 7px;
+    border-radius: 0px;
     padding: 5px 8px;
     color: #8E8E93;
 }
@@ -320,9 +270,10 @@ calendar.tk-cal > grid > label.day-number.today {
 }
 
 box.tk-clock-box {
-    background-color: #161618;
-    border: 1px solid #2C2C30;
-    border-radius: 12px;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
     padding: 8px 10px;
 }
 
@@ -563,67 +514,132 @@ button.tk-menu-item-btn:hover {
     color: #F5F5F7;
 }
 
-/* Add task banner below title, matching running task style without shadow */
-menubutton.tk-add-banner-btn {
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 2px 0 6px 0;
-}
-
-menubutton.tk-add-banner-btn > button {
+/* Merged inline Add Task card below title */
+box.tk-add-card {
     background-color: #131317;
     border: 1px solid #222228;
     border-radius: 12px;
-    padding: 11px 15px;
+    padding: 10px 14px;
+    margin: 2px 0 6px 0;
     box-shadow: none;
-    color: #8E8E93;
     transition: background-color 130ms ease, border-color 130ms ease;
 }
 
-menubutton.tk-add-banner-btn > button:hover {
-    background-color: #19191F;
-    border-color: #31313A;
-    color: #F5F5F7;
+box.tk-add-card:hover {
+    background-color: #17171D;
+    border-color: #2E2E37;
+}
+
+box.tk-add-card.expanded {
+    background-color: #131317;
+    border-color: #363640;
+    padding: 12px 14px 14px 14px;
+}
+
+entry.tk-add-inline-entry,
+entry.tk-add-inline-entry:focus-within {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    outline: none;
+    outline-width: 0;
     box-shadow: none;
+    color: #F5F5F7;
+    padding: 2px 0;
+    min-height: 24px;
+    font-size: 13.5px;
+    font-weight: 500;
+    caret-color: #F5F5F7;
+}
+
+box.tk-add-details {
+    margin-top: 10px;
+    padding-top: 12px;
+    border-top: 1px solid #1E1E24;
+}
+
+textview.tk-detail-entry text {
+    background-color: #17171C;
+    border: 1px solid #282830;
+    border-radius: 0px;
+    color: #F5F5F7;
+    padding: 8px 10px;
+    font-size: 13px;
+    caret-color: #F5F5F7;
+}
+
+textview.tk-detail-entry text:focus-within {
+    border-color: #636366;
+}
+
+label.tk-detail-field-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: #8E8E93;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+box.tk-subtask-row {
+    padding: 2px 0;
+}
+
+checkbutton.tk-sub-check check {
+    min-width: 15px;
+    min-height: 15px;
+    border-radius: 4px;
+    border: 1.5px solid #3A3A40;
+    background-color: transparent;
+}
+
+checkbutton.tk-sub-check check:checked {
+    background-color: #30D158;
+    border-color: #30D158;
+}
+
+label.tk-sub-title {
+    font-size: 12px;
+    color: #AEAEB2;
+}
+
+label.tk-sub-title.done {
+    color: #55555C;
+    text-decoration: line-through;
+}
+
+label.tk-task-detail {
+    font-size: 12px;
+    color: #8E8E93;
+    margin-top: 2px;
 }
 
 box.tk-add-plus-badge {
-    min-width: 20px;
-    min-height: 20px;
-    border-radius: 999px;
-    border: 1.5px solid #48484E;
-    background-color: #18181E;
-    color: #AEAEB2;
-    padding: 2px;
-    transition: all 120ms ease;
+    min-width: 18px;
+    min-height: 18px;
+    border: none;
+    background-color: transparent;
+    color: #7A7A82;
+    padding: 0;
+    transition: color 120ms ease;
 }
 
-menubutton.tk-add-banner-btn > button:hover box.tk-add-plus-badge {
-    border-color: #8E8E93;
-    background-color: #22222B;
+box.tk-add-card:hover box.tk-add-plus-badge,
+box.tk-add-card.expanded box.tk-add-plus-badge {
+    background-color: transparent;
     color: #F5F5F7;
 }
 
-label.tk-add-placeholder {
+label.tk-add-hint {
     font-size: 13.5px;
     font-weight: 500;
     color: #7A7A82;
+    opacity: 1.0;
+    transition: color 120ms ease;
 }
 
-menubutton.tk-add-banner-btn > button:hover label.tk-add-placeholder {
+box.tk-add-card:hover label.tk-add-hint {
     color: #AEAEB2;
-}
-
-label.tk-add-shortcut {
-    font-size: 11px;
-    font-weight: 500;
-    color: #636366;
-    background-color: #18181E;
-    border: 1px solid #24242B;
-    border-radius: 6px;
-    padding: 2px 7px;
-    margin-left: 4px;
 }
 
 /* Collapsible side drawer on the left */

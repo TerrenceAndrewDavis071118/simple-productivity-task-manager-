@@ -23,9 +23,16 @@ struct NotifItem {
     NotifKind kind = NotifKind::Ready;
 };
 
+struct SubTask {
+    std::string title;
+    bool done = false;
+};
+
 struct Task {
     long id = 0;
     std::string title;
+    std::string detail;
+    std::vector<SubTask> subtasks;
     time_t start_at = 0;
     time_t deadline_at = 0;
     time_t expires_at = 0;
@@ -50,6 +57,66 @@ struct StatSummary {
     int total_completed() const { return on_time + late; }
     int total() const { return on_time + late + failed; }
 };
+
+inline std::vector<SubTask> parse_subtasks(const std::string& detail) {
+    std::vector<SubTask> res;
+    std::istringstream ss(detail);
+    std::string line;
+    while (std::getline(ss, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+        }
+        size_t start = 0;
+        while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) {
+            ++start;
+        }
+        if (start >= line.size()) continue;
+        std::string s = line.substr(start);
+
+        SubTask st;
+        if (s.size() >= 4 && (s.substr(0, 4) == "[x] " || s.substr(0, 4) == "[X] ")) {
+            st.done = true;
+            st.title = s.substr(4);
+        } else if (s.size() >= 4 && s.substr(0, 4) == "[ ] ") {
+            st.done = false;
+            st.title = s.substr(4);
+        } else if (s.size() >= 3 && (s.substr(0, 3) == "[x]" || s.substr(0, 3) == "[X]")) {
+            st.done = true;
+            st.title = s.substr(3);
+        } else if (s.size() >= 3 && s.substr(0, 3) == "[ ]") {
+            st.done = false;
+            st.title = s.substr(3);
+        } else if (s.size() >= 2 && (s.substr(0, 2) == "- " || s.substr(0, 2) == "* ")) {
+            st.done = false;
+            st.title = s.substr(2);
+        } else {
+            st.done = false;
+            st.title = s;
+        }
+        while (!st.title.empty() && (st.title.back() == ' ' || st.title.back() == '\t')) {
+            st.title.pop_back();
+        }
+        size_t ts = 0;
+        while (ts < st.title.size() && (st.title[ts] == ' ' || st.title[ts] == '\t')) {
+            ++ts;
+        }
+        if (ts > 0) st.title = st.title.substr(ts);
+        if (!st.title.empty()) {
+            res.push_back(std::move(st));
+        }
+    }
+    return res;
+}
+
+inline std::string format_subtasks(const std::vector<SubTask>& subtasks) {
+    std::string res;
+    for (size_t i = 0; i < subtasks.size(); ++i) {
+        if (i > 0) res += "\\n";
+        res += subtasks[i].done ? "[x] " : "[ ] ";
+        res += subtasks[i].title;
+    }
+    return res;
+}
 
 inline std::string format_hm(time_t t) {
     std::tm tm_val{};
@@ -189,7 +256,13 @@ public:
                 t.start_at = static_cast<time_t>(std::stoll(cols[3]));
                 t.deadline_at = static_cast<time_t>(std::stoll(cols[4]));
                 t.expires_at = static_cast<time_t>(std::stoll(cols[5]));
-                if (cols.size() >= 9) {
+                if (cols.size() >= 10) {
+                    t.completed_at = static_cast<time_t>(std::stoll(cols[6]));
+                    t.title = cols[7];
+                    t.warned_5m = (std::stoi(cols[8]) != 0);
+                    t.detail = cols[9];
+                    t.subtasks = parse_subtasks(t.detail);
+                } else if (cols.size() >= 9) {
                     t.completed_at = static_cast<time_t>(std::stoll(cols[6]));
                     t.title = cols[7];
                     t.warned_5m = (std::stoi(cols[8]) != 0);
@@ -224,14 +297,18 @@ public:
                 << static_cast<long long>(t.expires_at) << '\t'
                 << static_cast<long long>(t.completed_at) << '\t'
                 << sanitize(t.title) << '\t'
-                << (t.warned_5m ? 1 : 0) << '\n';
+                << (t.warned_5m ? 1 : 0) << '\t'
+                << sanitize(t.subtasks.empty() ? t.detail : format_subtasks(t.subtasks)) << '\n';
         }
     }
 
-    const Task& add(const std::string& title, time_t start_at, time_t deadline_at, time_t expires_at) {
+    const Task& add(const std::string& title, time_t start_at, time_t deadline_at, time_t expires_at,
+                    const std::string& detail = "") {
         Task t;
         t.id = next_id++;
         t.title = sanitize(title);
+        t.detail = sanitize(detail);
+        t.subtasks = parse_subtasks(detail);
         t.start_at = start_at;
         t.deadline_at = deadline_at;
         t.expires_at = expires_at;
@@ -249,10 +326,49 @@ public:
             if (t.id == id) {
                 t.status = st;
                 t.completed_at = (st == Status::Achieved) ? std::time(nullptr) : 0;
+                if (st == Status::Achieved) {
+                    for (auto& sub : t.subtasks) {
+                        sub.done = true;
+                    }
+                    if (!t.subtasks.empty()) {
+                        t.detail = format_subtasks(t.subtasks);
+                    }
+                }
                 save();
                 return;
             }
         }
+    }
+
+    bool set_subtask_done(long task_id, size_t sub_idx, bool done) {
+        for (auto& t : tasks) {
+            if (t.id == task_id) {
+                if (sub_idx < t.subtasks.size()) {
+                    t.subtasks[sub_idx].done = done;
+                    t.detail = format_subtasks(t.subtasks);
+                    bool all_done = true;
+                    for (const auto& sub : t.subtasks) {
+                        if (!sub.done) {
+                            all_done = false;
+                            break;
+                        }
+                    }
+                    if (all_done) {
+                        t.status = Status::Achieved;
+                        t.completed_at = std::time(nullptr);
+                        save();
+                        return true; // triggered main task completion
+                    } else if (t.status == Status::Achieved) {
+                        // A subtask was unchecked from an achieved task
+                        t.status = Status::Active;
+                        t.completed_at = 0;
+                    }
+                    save();
+                }
+                return false;
+            }
+        }
+        return false;
     }
 
     void remove_permanently(long id) {
