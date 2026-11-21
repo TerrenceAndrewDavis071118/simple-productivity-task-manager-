@@ -26,6 +26,7 @@ struct NotifItem {
 struct SubTask {
     std::string title;
     bool done = false;
+    std::string image_path;
 };
 
 struct Task {
@@ -58,7 +59,71 @@ struct StatSummary {
     int total() const { return on_time + late + failed; }
 };
 
-inline std::vector<SubTask> parse_subtasks(const std::string& detail) {
+inline std::string unescape_newlines(const std::string& s) {
+    std::string res;
+    res.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\\' && i + 1 < s.size()) {
+            if (s[i + 1] == 'n') {
+                res += '\n';
+                ++i;
+                continue;
+            } else if (s[i + 1] == 'r') {
+                res += '\r';
+                ++i;
+                continue;
+            }
+        }
+        res += s[i];
+    }
+    return res;
+}
+
+inline std::vector<std::string> extract_image_paths(const std::string& raw_detail) {
+    std::string text = unescape_newlines(raw_detail);
+    std::vector<std::string> paths;
+    size_t pos = 0;
+    while ((pos = text.find("[img:", pos)) != std::string::npos) {
+        size_t end = text.find("]", pos + 5);
+        if (end != std::string::npos) {
+            std::string p = text.substr(pos + 5, end - (pos + 5));
+            if (!p.empty()) {
+                paths.push_back(std::move(p));
+            }
+            pos = end + 1;
+        } else {
+            break;
+        }
+    }
+    return paths;
+}
+
+inline std::string strip_image_tags(const std::string& raw_detail) {
+    std::string text = unescape_newlines(raw_detail);
+    std::string res;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t tag = text.find("[img:", pos);
+        if (tag != std::string::npos) {
+            res.append(text, pos, tag - pos);
+            size_t end = text.find("]", tag + 5);
+            if (end != std::string::npos) {
+                pos = end + 1;
+                while (pos < text.size() && (text[pos] == '\r' || text[pos] == '\n')) ++pos;
+            } else {
+                res.append(text, tag, std::string::npos);
+                break;
+            }
+        } else {
+            res.append(text, pos, std::string::npos);
+            break;
+        }
+    }
+    return res;
+}
+
+inline std::vector<SubTask> parse_subtasks(const std::string& raw_detail) {
+    std::string detail = unescape_newlines(raw_detail);
     std::vector<SubTask> res;
     std::istringstream ss(detail);
     std::string line;
@@ -76,23 +141,42 @@ inline std::vector<SubTask> parse_subtasks(const std::string& detail) {
         SubTask st;
         if (s.size() >= 4 && (s.substr(0, 4) == "[x] " || s.substr(0, 4) == "[X] ")) {
             st.done = true;
-            st.title = s.substr(4);
+            s = s.substr(4);
         } else if (s.size() >= 4 && s.substr(0, 4) == "[ ] ") {
             st.done = false;
-            st.title = s.substr(4);
+            s = s.substr(4);
         } else if (s.size() >= 3 && (s.substr(0, 3) == "[x]" || s.substr(0, 3) == "[X]")) {
             st.done = true;
-            st.title = s.substr(3);
+            s = s.substr(3);
         } else if (s.size() >= 3 && s.substr(0, 3) == "[ ]") {
             st.done = false;
-            st.title = s.substr(3);
+            s = s.substr(3);
         } else if (s.size() >= 2 && (s.substr(0, 2) == "- " || s.substr(0, 2) == "* ")) {
             st.done = false;
-            st.title = s.substr(2);
+            s = s.substr(2);
         } else {
             st.done = false;
+        }
+
+        // Check if line contains [img:<path>]
+        size_t img_pos = s.find("[img:");
+        if (img_pos != std::string::npos) {
+            size_t img_end = s.find("]", img_pos + 5);
+            if (img_end != std::string::npos) {
+                st.image_path = s.substr(img_pos + 5, img_end - (img_pos + 5));
+                std::string t1 = s.substr(0, img_pos);
+                std::string t2 = (img_end + 1 < s.size()) ? s.substr(img_end + 1) : "";
+                std::string combined = t1 + " " + t2;
+                while (!combined.empty() && (combined.front() == ' ' || combined.front() == '\t')) combined.erase(0, 1);
+                while (!combined.empty() && (combined.back() == ' ' || combined.back() == '\t')) combined.pop_back();
+                st.title = std::move(combined);
+            } else {
+                st.title = s;
+            }
+        } else {
             st.title = s;
         }
+
         while (!st.title.empty() && (st.title.back() == ' ' || st.title.back() == '\t')) {
             st.title.pop_back();
         }
@@ -101,7 +185,8 @@ inline std::vector<SubTask> parse_subtasks(const std::string& detail) {
             ++ts;
         }
         if (ts > 0) st.title = st.title.substr(ts);
-        if (!st.title.empty()) {
+
+        if (!st.title.empty() || !st.image_path.empty()) {
             res.push_back(std::move(st));
         }
     }
@@ -113,7 +198,13 @@ inline std::string format_subtasks(const std::vector<SubTask>& subtasks) {
     for (size_t i = 0; i < subtasks.size(); ++i) {
         if (i > 0) res += "\\n";
         res += subtasks[i].done ? "[x] " : "[ ] ";
-        res += subtasks[i].title;
+        if (!subtasks[i].title.empty()) {
+            res += subtasks[i].title;
+            if (!subtasks[i].image_path.empty()) res += " ";
+        }
+        if (!subtasks[i].image_path.empty()) {
+            res += "[img:" + subtasks[i].image_path + "]";
+        }
     }
     return res;
 }

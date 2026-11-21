@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -327,10 +328,16 @@ static void on_subtask_toggled(GtkCheckButton* btn, gpointer user_data) {
     refresh_ui(s);
 }
 
+static GtkWidget* create_thumbnail_widget(const std::string& path, int max_w = 260, int max_h = 160);
+static gboolean on_editor_key_pressed(GtkEventControllerKey*, guint keyval, guint, GdkModifierType, gpointer);
+
 static GtkWidget* build_task_row(AppState* s, const tk::Task& t) {
-    GtkWidget* row_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    GtkWidget* row_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
     gtk_widget_add_css_class(row_box, "tk-row");
-    gtk_widget_set_valign(row_box, GTK_ALIGN_CENTER);
+
+    // Header bar within card: [Checkbox] [Title] --- [Time] [Delete]
+    GtkWidget* header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_valign(header_row, GTK_ALIGN_CENTER);
 
     GtkWidget* check = gtk_check_button_new();
     gtk_widget_add_css_class(check, "tk-check");
@@ -342,23 +349,40 @@ static GtkWidget* build_task_row(AppState* s, const tk::Task& t) {
         set_widget_task_id(check, t.id);
         g_signal_connect(check, "toggled", G_CALLBACK(on_check_toggled), s);
     }
-    gtk_box_append(GTK_BOX(row_box), check);
-
-    GtkWidget* text_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-    gtk_widget_set_hexpand(text_box, TRUE);
+    gtk_box_append(GTK_BOX(header_row), check);
 
     GtkWidget* title = gtk_label_new(t.title.c_str());
     gtk_widget_add_css_class(title, "tk-task-title");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_END);
-    gtk_box_append(GTK_BOX(text_box), title);
+    gtk_widget_set_hexpand(title, TRUE);
+    gtk_box_append(GTK_BOX(header_row), title);
 
+    std::string hm = tk::format_hm(t.deadline_at);
+    GtkWidget* deadline_lbl = gtk_label_new(hm.c_str());
+    gtk_widget_add_css_class(deadline_lbl, "tk-task-time");
+    gtk_widget_set_valign(deadline_lbl, GTK_ALIGN_CENTER);
+    gtk_box_append(GTK_BOX(header_row), deadline_lbl);
+
+    GtkWidget* del_btn = gtk_button_new_from_icon_name("window-close-symbolic");
+    gtk_widget_add_css_class(del_btn, "tk-del-btn");
+    gtk_widget_set_valign(del_btn, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(del_btn,
+        t.status == tk::Status::Active ? "Remove task" : "Delete permanently");
+    set_widget_task_id(del_btn, t.id);
+    g_signal_connect(del_btn, "clicked", G_CALLBACK(on_delete_clicked), s);
+    gtk_box_append(GTK_BOX(header_row), del_btn);
+
+    gtk_box_append(GTK_BOX(row_box), header_row);
+
+    // Subtasks / Details section indented directly beneath title
     if (!t.subtasks.empty()) {
-        GtkWidget* subs_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        GtkWidget* subs_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+        gtk_widget_set_margin_start(subs_box, 32);
         gtk_widget_set_margin_top(subs_box, 2);
         for (size_t i = 0; i < t.subtasks.size(); ++i) {
             const auto& sub = t.subtasks[i];
-            GtkWidget* sub_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+            GtkWidget* sub_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
             gtk_widget_add_css_class(sub_row, "tk-subtask-row");
 
             GtkWidget* sub_chk = gtk_check_button_new();
@@ -373,40 +397,42 @@ static GtkWidget* build_task_row(AppState* s, const tk::Task& t) {
             }
             gtk_box_append(GTK_BOX(sub_row), sub_chk);
 
-            GtkWidget* sub_lbl = gtk_label_new(sub.title.c_str());
-            gtk_widget_add_css_class(sub_lbl, "tk-sub-title");
-            if (sub.done) {
-                gtk_widget_add_css_class(sub_lbl, "done");
+            if (!sub.title.empty()) {
+                GtkWidget* sub_lbl = gtk_label_new(sub.title.c_str());
+                gtk_widget_add_css_class(sub_lbl, "tk-sub-title");
+                if (sub.done) {
+                    gtk_widget_add_css_class(sub_lbl, "done");
+                }
+                gtk_label_set_xalign(GTK_LABEL(sub_lbl), 0.0f);
+                gtk_label_set_ellipsize(GTK_LABEL(sub_lbl), PANGO_ELLIPSIZE_END);
+                gtk_box_append(GTK_BOX(sub_row), sub_lbl);
             }
-            gtk_label_set_xalign(GTK_LABEL(sub_lbl), 0.0f);
-            gtk_label_set_ellipsize(GTK_LABEL(sub_lbl), PANGO_ELLIPSIZE_END);
-            gtk_box_append(GTK_BOX(sub_row), sub_lbl);
+
+            if (!sub.image_path.empty()) {
+                GtkWidget* thumb = create_thumbnail_widget(sub.image_path, 160, 100);
+                if (thumb) {
+                    if (sub.done) {
+                        gtk_widget_set_opacity(thumb, 0.45);
+                    }
+                    gtk_box_append(GTK_BOX(sub_row), thumb);
+                }
+            }
 
             gtk_box_append(GTK_BOX(subs_box), sub_row);
         }
-        gtk_box_append(GTK_BOX(text_box), subs_box);
+        gtk_box_append(GTK_BOX(row_box), subs_box);
     } else if (!t.detail.empty()) {
-        GtkWidget* detail_lbl = gtk_label_new(t.detail.c_str());
-        gtk_widget_add_css_class(detail_lbl, "tk-task-detail");
-        gtk_label_set_xalign(GTK_LABEL(detail_lbl), 0.0f);
-        gtk_label_set_ellipsize(GTK_LABEL(detail_lbl), PANGO_ELLIPSIZE_END);
-        gtk_box_append(GTK_BOX(text_box), detail_lbl);
+        std::string unesc = tk::strip_image_tags(t.detail);
+        if (!unesc.empty()) {
+            GtkWidget* detail_lbl = gtk_label_new(unesc.c_str());
+            gtk_widget_add_css_class(detail_lbl, "tk-task-detail");
+            gtk_widget_set_margin_start(detail_lbl, 32);
+            gtk_label_set_xalign(GTK_LABEL(detail_lbl), 0.0f);
+            gtk_label_set_wrap(GTK_LABEL(detail_lbl), TRUE);
+            gtk_label_set_wrap_mode(GTK_LABEL(detail_lbl), PANGO_WRAP_WORD_CHAR);
+            gtk_box_append(GTK_BOX(row_box), detail_lbl);
+        }
     }
-
-    gtk_box_append(GTK_BOX(row_box), text_box);
-
-    std::string hm = tk::format_hm(t.deadline_at);
-    GtkWidget* deadline_lbl = gtk_label_new(hm.c_str());
-    gtk_widget_add_css_class(deadline_lbl, "tk-task-time");
-    gtk_box_append(GTK_BOX(row_box), deadline_lbl);
-
-    GtkWidget* del_btn = gtk_button_new_from_icon_name("window-close-symbolic");
-    gtk_widget_add_css_class(del_btn, "tk-del-btn");
-    gtk_widget_set_tooltip_text(del_btn,
-        t.status == tk::Status::Active ? "Remove task" : "Delete permanently");
-    set_widget_task_id(del_btn, t.id);
-    g_signal_connect(del_btn, "clicked", G_CALLBACK(on_delete_clicked), s);
-    gtk_box_append(GTK_BOX(row_box), del_btn);
 
     GtkWidget* row = gtk_list_box_row_new();
     gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), FALSE);
@@ -1128,6 +1154,544 @@ static gboolean on_time_scroll(GtkEventControllerScroll* ctrl, double, double dy
     return TRUE;
 }
 
+static std::filesystem::path get_images_storage_dir() {
+    auto p = tk::get_default_data_dir() / "images";
+    std::error_code ec;
+    std::filesystem::create_directories(p, ec);
+    return p;
+}
+
+static bool is_image_file(const std::string& path) {
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::exists(path, ec) || std::filesystem::is_directory(path, ec)) {
+        return false;
+    }
+    std::string ext = std::filesystem::path(path).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    return (ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp" ||
+            ext == ".bmp" || ext == ".gif" || ext == ".svg" || ext == ".tiff" ||
+            ext == ".tif" || ext == ".ico" || ext == ".avif");
+}
+
+static std::vector<std::string> parse_paths_or_uris(const std::string& input) {
+    std::vector<std::string> results;
+    std::istringstream ss(input);
+    std::string line;
+    while (std::getline(ss, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+            line.pop_back();
+        }
+        size_t start = 0;
+        while (start < line.size() && (line[start] == ' ' || line[start] == '\t')) {
+            ++start;
+        }
+        if (start >= line.size()) continue;
+        std::string item = line.substr(start);
+
+        if (item.rfind("file://", 0) == 0) {
+            char* fpath = g_filename_from_uri(item.c_str(), nullptr, nullptr);
+            if (fpath) {
+                results.push_back(std::string(fpath));
+                g_free(fpath);
+            }
+        } else if (item[0] == '/' || (item.size() >= 3 && std::isalpha(static_cast<unsigned char>(item[0])) && item[1] == ':' && (item[2] == '\\' || item[2] == '/'))) {
+            results.push_back(item);
+        }
+    }
+    return results;
+}
+
+static std::string save_image_file_to_storage(const std::string& src_path) {
+    std::error_code ec;
+    if (!std::filesystem::exists(src_path, ec) || std::filesystem::is_directory(src_path, ec)) return "";
+    auto dir = get_images_storage_dir();
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string ext = std::filesystem::path(src_path).extension().string();
+    if (ext.empty()) ext = ".png";
+    std::string filename = "img_" + std::to_string(now_ms) + ext;
+    auto dst = dir / filename;
+    int counter = 1;
+    while (std::filesystem::exists(dst, ec)) {
+        filename = "img_" + std::to_string(now_ms) + "_" + std::to_string(counter++) + ext;
+        dst = dir / filename;
+    }
+    std::filesystem::copy_file(src_path, dst, std::filesystem::copy_options::overwrite_existing, ec);
+    if (!ec) return dst.string();
+    return "";
+}
+
+static std::string save_texture_to_storage(GdkTexture* tex) {
+    if (!tex) return "";
+    int w = gdk_texture_get_width(tex);
+    int h = gdk_texture_get_height(tex);
+    if (w <= 0 || h <= 0) return "";
+    auto dir = get_images_storage_dir();
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string filename = "img_" + std::to_string(now_ms) + ".png";
+    auto dst = dir / filename;
+    std::error_code ec;
+    int counter = 1;
+    while (std::filesystem::exists(dst, ec)) {
+        filename = "img_" + std::to_string(now_ms) + "_" + std::to_string(counter++) + ".png";
+        dst = dir / filename;
+    }
+    if (gdk_texture_save_to_png(tex, dst.string().c_str())) {
+        return dst.string();
+    }
+    return "";
+}
+
+static GtkWidget* create_thumbnail_widget(const std::string& path, int max_w, int max_h) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return nullptr;
+    GError* err = nullptr;
+    GdkTexture* tex = gdk_texture_new_from_filename(path.c_str(), &err);
+    if (!tex) {
+        if (err) g_error_free(err);
+        return nullptr;
+    }
+    int orig_w = gdk_texture_get_width(tex);
+    int orig_h = gdk_texture_get_height(tex);
+    if (orig_w <= 8 || orig_h <= 8) {
+        g_object_unref(tex);
+        return nullptr;
+    }
+    double sw = static_cast<double>(max_w) / orig_w;
+    double sh = static_cast<double>(max_h) / orig_h;
+    double scale = std::min(1.0, std::min(sw, sh));
+    int target_w = std::max(24, static_cast<int>(orig_w * scale));
+    int target_h = std::max(24, static_cast<int>(orig_h * scale));
+
+    GtkWidget* pic = gtk_picture_new_for_paintable(GDK_PAINTABLE(tex));
+    gtk_picture_set_can_shrink(GTK_PICTURE(pic), TRUE);
+    gtk_picture_set_content_fit(GTK_PICTURE(pic), GTK_CONTENT_FIT_COVER);
+    gtk_widget_set_size_request(pic, target_w, target_h);
+    gtk_widget_add_css_class(pic, "tk-detail-img");
+
+    // Click to open in default viewer
+    GtkGesture* click = gtk_gesture_click_new();
+    char* copy_path = g_strdup(path.c_str());
+    g_object_set_data_full(G_OBJECT(pic), "img-path-data", copy_path, g_free);
+    g_signal_connect(click, "pressed", G_CALLBACK(+[](GtkGestureClick*, int, double, double, gpointer ud) {
+        const char* p = static_cast<const char*>(ud);
+        if (p) {
+            GFile* f = g_file_new_for_path(p);
+            char* uri = g_file_get_uri(f);
+            g_app_info_launch_default_for_uri(uri, nullptr, nullptr);
+            g_free(uri);
+            g_object_unref(f);
+        }
+    }), copy_path);
+    gtk_widget_add_controller(pic, GTK_EVENT_CONTROLLER(click));
+    gtk_widget_set_cursor_from_name(pic, "pointer");
+    gtk_widget_set_tooltip_text(pic, "Click to view image");
+
+    g_object_unref(tex);
+    return pic;
+}
+
+static std::string serialize_detail_buffer(GtkTextBuffer* buf) {
+    if (!buf) return "";
+    GtkTextIter iter;
+    gtk_text_buffer_get_start_iter(buf, &iter);
+    std::string result;
+    while (!gtk_text_iter_is_end(&iter)) {
+        GdkPaintable* p = gtk_text_iter_get_paintable(&iter);
+        if (p) {
+            const char* path = static_cast<const char*>(g_object_get_data(G_OBJECT(p), "img-path"));
+            if (path && *path) {
+                result += "[img:";
+                result += path;
+                result += "]";
+            }
+            gtk_text_iter_forward_char(&iter);
+            continue;
+        }
+        gunichar ch = gtk_text_iter_get_char(&iter);
+        if (ch == 0xFFFC) {
+            gtk_text_iter_forward_char(&iter);
+            continue;
+        }
+        if (ch != 0) {
+            char utf8[8] = {0};
+            int len = g_unichar_to_utf8(ch, utf8);
+            result.append(utf8, len);
+        }
+        gtk_text_iter_forward_char(&iter);
+    }
+    return result;
+}
+
+static void populate_detail_buffer(GtkTextBuffer* buf, const std::string& raw) {
+    if (!buf) return;
+    gtk_text_buffer_set_text(buf, "", -1);
+    std::string text = tk::unescape_newlines(raw);
+    GtkTextIter iter;
+    gtk_text_buffer_get_start_iter(buf, &iter);
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t img_start = text.find("[img:", pos);
+        if (img_start != std::string::npos) {
+            if (img_start > pos) {
+                std::string chunk = text.substr(pos, img_start - pos);
+                gtk_text_buffer_insert(buf, &iter, chunk.c_str(), chunk.size());
+            }
+            size_t img_end = text.find("]", img_start + 5);
+            if (img_end != std::string::npos) {
+                std::string path = text.substr(img_start + 5, img_end - (img_start + 5));
+                std::error_code ec;
+                if (std::filesystem::exists(path, ec)) {
+                    GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(path.c_str(), 180, 110, TRUE, nullptr);
+                    if (pb) {
+                        GdkTexture* tex = gdk_texture_new_for_pixbuf(pb);
+                        g_object_unref(pb);
+                        if (tex) {
+                            g_object_set_data_full(G_OBJECT(tex), "img-path", g_strdup(path.c_str()), g_free);
+                            gtk_text_buffer_insert_paintable(buf, &iter, GDK_PAINTABLE(tex));
+                            g_object_unref(tex);
+                        }
+                    }
+                }
+                pos = img_end + 1;
+            } else {
+                std::string rest = text.substr(img_start);
+                gtk_text_buffer_insert(buf, &iter, rest.c_str(), rest.size());
+                break;
+            }
+        } else {
+            std::string rest = text.substr(pos);
+            gtk_text_buffer_insert(buf, &iter, rest.c_str(), rest.size());
+            break;
+        }
+    }
+}
+
+static void open_add_composer(AppState* s);
+
+static void insert_image_into_detail_view(AppState* s, const std::string& saved_path) {
+    if (!s || saved_path.empty()) return;
+    std::error_code ec;
+    if (!std::filesystem::exists(saved_path, ec)) return;
+
+    if (!s->add_expanded) {
+        open_add_composer(s);
+    }
+    if (!s->detail_view) return;
+
+    GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+    if (!buf) return;
+
+    GdkPixbuf* pb = gdk_pixbuf_new_from_file_at_scale(saved_path.c_str(), 180, 110, TRUE, nullptr);
+    if (!pb) return;
+    GdkTexture* tex = gdk_texture_new_for_pixbuf(pb);
+    g_object_unref(pb);
+    if (!tex) return;
+
+    g_object_set_data_full(G_OBJECT(tex), "img-path", g_strdup(saved_path.c_str()), g_free);
+
+    GtkTextIter iter;
+    gtk_text_buffer_get_iter_at_mark(buf, &iter, gtk_text_buffer_get_insert(buf));
+
+    // If iter is not at the start of a line and previous char is not newline, add newline first
+    if (!gtk_text_iter_starts_line(&iter)) {
+        gunichar prev_ch = 0;
+        GtkTextIter prev_iter = iter;
+        if (gtk_text_iter_backward_char(&prev_iter)) {
+            prev_ch = gtk_text_iter_get_char(&prev_iter);
+        }
+        if (prev_ch != '\n') {
+            gtk_text_buffer_insert(buf, &iter, "\n", 1);
+        }
+    }
+
+    gtk_text_buffer_insert_paintable(buf, &iter, GDK_PAINTABLE(tex));
+    g_object_unref(tex);
+
+    // Enter newline after image so the next detail is on a new line!
+    gtk_text_buffer_insert(buf, &iter, "\n", 1);
+
+    tk::play_click_sound();
+}
+
+static std::string read_entire_stream_as_string(GInputStream* in) {
+    if (!in) return "";
+    std::string out;
+    char buf[4096];
+    gssize n = 0;
+    while ((n = g_input_stream_read(in, buf, sizeof(buf), nullptr, nullptr)) > 0) {
+        out.append(buf, n);
+    }
+    return out;
+}
+
+static std::string save_stream_to_storage(GInputStream* in, const std::string& mime) {
+    if (!in) return "";
+    auto dir = get_images_storage_dir();
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    std::string ext = ".png";
+    if (mime.find("jpeg") != std::string::npos || mime.find("jpg") != std::string::npos) ext = ".jpg";
+    else if (mime.find("webp") != std::string::npos) ext = ".webp";
+    else if (mime.find("bmp") != std::string::npos) ext = ".bmp";
+    else if (mime.find("gif") != std::string::npos) ext = ".gif";
+
+    std::string filename = "img_" + std::to_string(now_ms) + ext;
+    auto dst = dir / filename;
+    std::error_code ec;
+    int counter = 1;
+    while (std::filesystem::exists(dst, ec)) {
+        filename = "img_" + std::to_string(now_ms) + "_" + std::to_string(counter++) + ext;
+        dst = dir / filename;
+    }
+
+    std::ofstream ofs(dst, std::ios::binary);
+    if (!ofs.is_open()) return "";
+
+    char buf[8192];
+    gssize n = 0;
+    while ((n = g_input_stream_read(in, buf, sizeof(buf), nullptr, nullptr)) > 0) {
+        ofs.write(buf, n);
+    }
+    ofs.close();
+
+    if (std::filesystem::exists(dst, ec) && std::filesystem::file_size(dst, ec) > 0) {
+        return dst.string();
+    }
+    std::filesystem::remove(dst, ec);
+    return "";
+}
+
+static bool clipboard_has_image(GdkClipboard* clip) {
+    if (!clip) return false;
+    GdkContentFormats* f = gdk_clipboard_get_formats(clip);
+    if (!f) return false;
+    if (gdk_content_formats_contain_gtype(f, GDK_TYPE_TEXTURE)) return true;
+    if (gdk_content_formats_contain_gtype(f, GDK_TYPE_FILE_LIST)) return true;
+    gsize n = 0;
+    const char* const* mimes = gdk_content_formats_get_mime_types(f, &n);
+    for (gsize i = 0; i < n; ++i) {
+        std::string m = mimes[i];
+        if (m.rfind("image/", 0) == 0) return true;
+        if (m == "text/uri-list" || m == "x-special/gnome-copied-files") return true;
+    }
+    return false;
+}
+
+static void read_clipboard_and_insert_image(AppState* s, GdkClipboard* clip, bool from_key_press = false) {
+    if (!s || !clip) return;
+    GdkContentFormats* f = gdk_clipboard_get_formats(clip);
+    if (!f) return;
+
+    bool has_texture = gdk_content_formats_contain_gtype(f, GDK_TYPE_TEXTURE);
+    bool has_image_mime = false;
+    bool has_uri_mime = false;
+    gsize n = 0;
+    const char* const* mimes = gdk_content_formats_get_mime_types(f, &n);
+    for (gsize i = 0; i < n; ++i) {
+        std::string m = mimes[i];
+        if (m.rfind("image/", 0) == 0) has_image_mime = true;
+        if (m == "text/uri-list" || m == "x-special/gnome-copied-files") has_uri_mime = true;
+    }
+
+    if (has_texture || has_image_mime) {
+        gdk_clipboard_read_texture_async(clip, nullptr, [](GObject* src, GAsyncResult* res, gpointer ud) {
+            auto* app = static_cast<AppState*>(ud);
+            GError* err = nullptr;
+            GdkTexture* tex = gdk_clipboard_read_texture_finish(GDK_CLIPBOARD(src), res, &err);
+            if (tex) {
+                int w = gdk_texture_get_width(tex);
+                int h = gdk_texture_get_height(tex);
+                if (w > 0 && h > 0) {
+                    std::string saved = save_texture_to_storage(tex);
+                    if (!saved.empty()) {
+                        insert_image_into_detail_view(app, saved);
+                    }
+                }
+                g_object_unref(tex);
+            } else {
+                if (err) g_error_free(err);
+                const char* img_mimes[] = {
+                    "image/png", "image/jpeg", "image/webp", "image/bmp", "image/gif", "image/tiff", nullptr
+                };
+                gdk_clipboard_read_async(GDK_CLIPBOARD(src), img_mimes, G_PRIORITY_DEFAULT, nullptr,
+                    [](GObject* s2, GAsyncResult* r2, gpointer ud2) {
+                        auto* app2 = static_cast<AppState*>(ud2);
+                        const char* out_mime = nullptr;
+                        GInputStream* in = gdk_clipboard_read_finish(GDK_CLIPBOARD(s2), r2, &out_mime, nullptr);
+                        if (in) {
+                            std::string saved = save_stream_to_storage(in, out_mime ? out_mime : "image/png");
+                            g_object_unref(in);
+                            if (!saved.empty()) {
+                                insert_image_into_detail_view(app2, saved);
+                            }
+                        }
+                    }, app);
+            }
+        }, s);
+        return;
+    }
+
+    if (has_uri_mime || gdk_content_formats_contain_gtype(f, GDK_TYPE_FILE_LIST)) {
+        struct UriCtx {
+            AppState* app;
+            bool from_key_press;
+        };
+        auto* ctx = new UriCtx{s, from_key_press};
+        const char* uri_mimes[] = { "text/uri-list", "x-special/gnome-copied-files", "text/plain", nullptr };
+        gdk_clipboard_read_async(clip, uri_mimes, G_PRIORITY_DEFAULT, nullptr,
+            [](GObject* src, GAsyncResult* res, gpointer ud) {
+                auto* uctx = static_cast<UriCtx*>(ud);
+                auto* app = uctx->app;
+                bool key_press = uctx->from_key_press;
+                delete uctx;
+
+                const char* out_mime = nullptr;
+                GInputStream* in = gdk_clipboard_read_finish(GDK_CLIPBOARD(src), res, &out_mime, nullptr);
+                if (in) {
+                    std::string content = read_entire_stream_as_string(in);
+                    g_object_unref(in);
+                    auto paths = parse_paths_or_uris(content);
+                    bool attached = false;
+                    for (const auto& p : paths) {
+                        if (is_image_file(p)) {
+                            std::string saved = save_image_file_to_storage(p);
+                            if (!saved.empty()) {
+                                insert_image_into_detail_view(app, saved);
+                                attached = true;
+                            }
+                        }
+                    }
+                    if (!attached && app->detail_view && key_press) {
+                        GtkTextBuffer* b = gtk_text_view_get_buffer(GTK_TEXT_VIEW(app->detail_view));
+                        gtk_text_buffer_insert_at_cursor(b, content.c_str(), -1);
+                    }
+                }
+            }, ctx);
+        return;
+    }
+}
+
+static gboolean on_detail_drop(GtkDropTarget*, const GValue* value, double, double, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    if (!s) return FALSE;
+
+    bool handled = false;
+
+    if (G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST)) {
+        GdkFileList* fl = static_cast<GdkFileList*>(g_value_get_boxed(value));
+        if (fl) {
+            GSList* files = gdk_file_list_get_files(fl);
+            for (GSList* l = files; l != nullptr; l = l->next) {
+                GFile* file = G_FILE(l->data);
+                if (file) {
+                    char* path = g_file_get_path(file);
+                    if (path) {
+                        std::string p(path);
+                        g_free(path);
+                        if (is_image_file(p)) {
+                            std::string saved = save_image_file_to_storage(p);
+                            if (!saved.empty()) {
+                                insert_image_into_detail_view(s, saved);
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+            }
+            g_slist_free(files);
+        }
+    } else if (G_VALUE_HOLDS(value, G_TYPE_FILE)) {
+        GFile* file = G_FILE(g_value_get_object(value));
+        if (file) {
+            char* path = g_file_get_path(file);
+            if (path) {
+                std::string p(path);
+                g_free(path);
+                if (is_image_file(p)) {
+                    std::string saved = save_image_file_to_storage(p);
+                    if (!saved.empty()) {
+                        insert_image_into_detail_view(s, saved);
+                        handled = true;
+                    }
+                }
+            }
+        }
+    } else if (G_VALUE_HOLDS(value, GDK_TYPE_TEXTURE)) {
+        GdkTexture* tex = GDK_TEXTURE(g_value_get_object(value));
+        if (tex) {
+            int w = gdk_texture_get_width(tex);
+            int h = gdk_texture_get_height(tex);
+            if (w > 0 && h > 0) {
+                std::string saved = save_texture_to_storage(tex);
+                if (!saved.empty()) {
+                    insert_image_into_detail_view(s, saved);
+                    handled = true;
+                }
+            }
+        }
+    } else if (G_VALUE_HOLDS(value, G_TYPE_STRING)) {
+        const char* str = g_value_get_string(value);
+        if (str) {
+            auto paths = parse_paths_or_uris(str);
+            for (const auto& p : paths) {
+                if (is_image_file(p)) {
+                    std::string saved = save_image_file_to_storage(p);
+                    if (!saved.empty()) {
+                        insert_image_into_detail_view(s, saved);
+                        handled = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return handled ? TRUE : FALSE;
+}
+
+static void setup_drop_target(GtkWidget* widget, AppState* s) {
+    if (!widget) return;
+    GType drop_types[] = { GDK_TYPE_FILE_LIST, G_TYPE_FILE, GDK_TYPE_TEXTURE, G_TYPE_STRING };
+    GtkDropTarget* target = gtk_drop_target_new(G_TYPE_INVALID,
+        static_cast<GdkDragAction>(GDK_ACTION_COPY | GDK_ACTION_MOVE));
+    gtk_drop_target_set_gtypes(target, drop_types, G_N_ELEMENTS(drop_types));
+    g_signal_connect(target, "drop", G_CALLBACK(on_detail_drop), s);
+    gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(target));
+}
+
+static gboolean on_editor_key_pressed(GtkEventControllerKey*, guint keyval, guint, GdkModifierType, gpointer);
+
+static gboolean on_detail_key_pressed(GtkEventControllerKey* ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    GdkModifierType mods = static_cast<GdkModifierType>(state & gtk_accelerator_get_default_mod_mask());
+    bool is_paste = (mods == GDK_CONTROL_MASK && (keyval == GDK_KEY_v || keyval == GDK_KEY_V)) ||
+                    (mods == GDK_SHIFT_MASK && keyval == GDK_KEY_Insert);
+    if (is_paste) {
+        GdkClipboard* clip = gtk_widget_get_clipboard(s->detail_view);
+        if (clipboard_has_image(clip)) {
+            read_clipboard_and_insert_image(s, clip, true);
+            return TRUE;
+        }
+    }
+    return on_editor_key_pressed(ctrl, keyval, keycode, state, user_data);
+}
+
+static gboolean on_title_key_pressed(GtkEventControllerKey* ctrl, guint keyval, guint keycode, GdkModifierType state, gpointer user_data) {
+    auto* s = static_cast<AppState*>(user_data);
+    GdkModifierType mods = static_cast<GdkModifierType>(state & gtk_accelerator_get_default_mod_mask());
+    bool is_paste = (mods == GDK_CONTROL_MASK && (keyval == GDK_KEY_v || keyval == GDK_KEY_V)) ||
+                    (mods == GDK_SHIFT_MASK && keyval == GDK_KEY_Insert);
+    if (is_paste) {
+        GdkClipboard* clip = gtk_widget_get_clipboard(s->title_entry);
+        if (clipboard_has_image(clip)) {
+            read_clipboard_and_insert_image(s, clip, true);
+            return TRUE;
+        }
+    }
+    return on_editor_key_pressed(ctrl, keyval, keycode, state, user_data);
+}
+
 static gboolean on_editor_key_pressed(GtkEventControllerKey*, guint keyval, guint, GdkModifierType, gpointer) {
     // Ignore pure modifier presses
     switch (keyval) {
@@ -1186,11 +1750,9 @@ static void open_add_composer(AppState* s) {
             GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
             GtkTextIter start_iter, end_iter;
             gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-            char* cur_text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
-            if (!cur_text || cur_text[0] == '\0') {
-                gtk_text_buffer_set_text(buf, s->draft_detail.c_str(), -1);
+            if (gtk_text_iter_equal(&start_iter, &end_iter)) {
+                populate_detail_buffer(buf, s->draft_detail);
             }
-            if (cur_text) g_free(cur_text);
         }
 
         s->add_expanded = true;
@@ -1217,13 +1779,7 @@ static void close_add_composer(AppState* s, bool clear_draft = false) {
     }
     if (s->detail_view) {
         GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
-        GtkTextIter start_iter, end_iter;
-        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-        char* text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
-        if (text) {
-            s->draft_detail = text;
-            g_free(text);
-        }
+        s->draft_detail = serialize_detail_buffer(buf);
     }
 
     if (clear_draft) {
@@ -1282,7 +1838,7 @@ static void on_window_pressed(GtkGestureClick* gesture, int, double x, double y,
     }
     const char* txt = gtk_editable_get_text(GTK_EDITABLE(s->title_entry));
     if (!txt || trim(txt).empty()) {
-        close_add_composer(s);
+        close_add_composer(s, true);
     }
 }
 
@@ -1308,13 +1864,7 @@ static void submit_add_task(AppState* s) {
     std::string detail;
     if (s->detail_view) {
         GtkTextBuffer* buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
-        GtkTextIter start_iter, end_iter;
-        gtk_text_buffer_get_bounds(buf, &start_iter, &end_iter);
-        char* text = gtk_text_buffer_get_text(buf, &start_iter, &end_iter, FALSE);
-        if (text) {
-            detail = trim(text);
-            g_free(text);
-        }
+        detail = trim(serialize_detail_buffer(buf));
     }
 
     time_t start_at = s->draft_times[0];
@@ -1378,13 +1928,13 @@ static GtkWidget* build_add_composer(AppState* s) {
     g_signal_connect(s->title_entry, "activate", G_CALLBACK(on_entry_activate), s);
     GtkEventController* title_key_ctrl = gtk_event_controller_key_new();
     gtk_event_controller_set_propagation_phase(title_key_ctrl, GTK_PHASE_CAPTURE);
-    g_signal_connect(title_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+    g_signal_connect(title_key_ctrl, "key-pressed", G_CALLBACK(on_title_key_pressed), s);
     gtk_widget_add_controller(s->title_entry, title_key_ctrl);
     GtkEditable* title_delegate = gtk_editable_get_delegate(GTK_EDITABLE(s->title_entry));
     if (title_delegate) {
         GtkEventController* del_key_ctrl = gtk_event_controller_key_new();
         gtk_event_controller_set_propagation_phase(del_key_ctrl, GTK_PHASE_CAPTURE);
-        g_signal_connect(del_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+        g_signal_connect(del_key_ctrl, "key-pressed", G_CALLBACK(on_title_key_pressed), s);
         gtk_widget_add_controller(GTK_WIDGET(title_delegate), del_key_ctrl);
     }
     gtk_box_append(GTK_BOX(top_row), s->title_entry);
@@ -1475,8 +2025,24 @@ static GtkWidget* build_add_composer(AppState* s) {
     gtk_text_view_set_left_margin(GTK_TEXT_VIEW(s->detail_view), 10);
     gtk_text_view_set_right_margin(GTK_TEXT_VIEW(s->detail_view), 10);
     GtkEventController* detail_key_ctrl = gtk_event_controller_key_new();
-    g_signal_connect(detail_key_ctrl, "key-pressed", G_CALLBACK(on_editor_key_pressed), s);
+    gtk_event_controller_set_propagation_phase(detail_key_ctrl, GTK_PHASE_CAPTURE);
+    g_signal_connect(detail_key_ctrl, "key-pressed", G_CALLBACK(on_detail_key_pressed), s);
     gtk_widget_add_controller(s->detail_view, detail_key_ctrl);
+
+    // Setup invisible drag and drop targets
+    setup_drop_target(s->detail_view, s);
+    setup_drop_target(desc_scroller, s);
+    setup_drop_target(s->add_card, s);
+
+    // Connect paste-done on text buffer to handle context-menu Paste
+    GtkTextBuffer* detail_buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail_view));
+    g_signal_connect(detail_buf, "paste-done", G_CALLBACK(+[](GtkTextBuffer*, GdkClipboard* clip, gpointer ud) {
+        auto* app = static_cast<AppState*>(ud);
+        if (clipboard_has_image(clip)) {
+            read_clipboard_and_insert_image(app, clip);
+        }
+    }), s);
+
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(desc_scroller), s->detail_view);
     gtk_box_append(GTK_BOX(left_desc_col), desc_scroller);
 
@@ -1877,12 +2443,13 @@ static void build_window(AppState* s) {
 
     // --- Right side: Tasks column (spacious, wide & high) ---
     GtkWidget* right_column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_widget_add_css_class(right_column, "tk-tasks-panel");
     gtk_widget_set_hexpand(right_column, TRUE);
     gtk_widget_set_vexpand(right_column, TRUE);
-    gtk_widget_set_margin_start(right_column, 20);
-    gtk_widget_set_margin_end(right_column, 20);
-    gtk_widget_set_margin_top(right_column, 12);
-    gtk_widget_set_margin_bottom(right_column, 16);
+    gtk_widget_set_margin_start(right_column, 16);
+    gtk_widget_set_margin_end(right_column, 16);
+    gtk_widget_set_margin_top(right_column, 8);
+    gtk_widget_set_margin_bottom(right_column, 14);
 
     // Tasks title row with count
     GtkWidget* title_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);

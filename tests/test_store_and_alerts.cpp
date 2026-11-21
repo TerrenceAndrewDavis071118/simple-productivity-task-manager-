@@ -320,6 +320,33 @@ void test_audio_playback_and_debounce() {
     std::cout << "[PASS] test_audio_playback_and_debounce\n";
 }
 
+// Test 10: Image tag extraction and stripping in task details
+void test_image_support_parsing() {
+    std::string detail_with_images = "[ ] First subtask\n[img:/tmp/test_image.png]\n[ ] Second subtask\n[img:/tmp/another.jpg]";
+    auto paths = tk::extract_image_paths(detail_with_images);
+    TEST_ASSERT(paths.size() == 2, "Should extract 2 image paths");
+    TEST_ASSERT(paths[0] == "/tmp/test_image.png", "First image path mismatch");
+    TEST_ASSERT(paths[1] == "/tmp/another.jpg", "Second image path mismatch");
+
+    std::string stripped = tk::strip_image_tags(detail_with_images);
+    TEST_ASSERT(stripped.find("[img:") == std::string::npos, "All image tags should be stripped");
+
+    auto subtasks = tk::parse_subtasks(detail_with_images);
+    TEST_ASSERT(subtasks.size() == 4, "Should parse 4 subtasks (including image items)");
+    TEST_ASSERT(subtasks[0].title == "First subtask" && subtasks[0].image_path.empty(), "Subtask 1 mismatch");
+    TEST_ASSERT(subtasks[1].image_path == "/tmp/test_image.png", "Subtask 2 image mismatch");
+    TEST_ASSERT(subtasks[2].title == "Second subtask" && subtasks[2].image_path.empty(), "Subtask 3 mismatch");
+    TEST_ASSERT(subtasks[3].image_path == "/tmp/another.jpg", "Subtask 4 image mismatch");
+
+    // Also test combined text + image subtask
+    auto combined = tk::parse_subtasks("[ ] Do something [img:/tmp/ref.png]");
+    TEST_ASSERT(combined.size() == 1, "Should parse 1 combined subtask");
+    TEST_ASSERT(combined[0].title == "Do something", "Combined title mismatch");
+    TEST_ASSERT(combined[0].image_path == "/tmp/ref.png", "Combined image mismatch");
+
+    std::cout << "[PASS] test_image_support_parsing\n";
+}
+
 int main() {
     std::cout << "Running Task Killer store & alert tests...\n";
     test_short_task_lifecycle();
@@ -331,6 +358,7 @@ int main() {
     test_audio_file_exists();
     test_audio_player_resolution();
     test_audio_playback_and_debounce();
+    test_image_support_parsing();
     std::cout << "ALL TESTS PASSED SUCCESSFULLY!\n";
     return 0;
 }

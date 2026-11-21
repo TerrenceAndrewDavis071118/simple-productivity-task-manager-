@@ -61,19 +61,63 @@ button.tk-nav.active {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
 }
 
+/* Scrolled window, Viewport & GtkListBox resets to prevent tube/rounded outline clipping and grey box */
+scrolledwindow,
+scrolledwindow > viewport,
+viewport {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+box.tk-tasks-panel {
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+list.tk-list {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+list.tk-list > row {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    padding: 5px 2px;
+    margin: 0;
+    border-radius: 0;
+}
+
+list.tk-list > row:hover,
+list.tk-list > row:selected,
+list.tk-list > row:focus,
+list.tk-list > row:active {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+}
+
 box.tk-row {
-    background: linear-gradient(180deg, rgba(32, 32, 38, 0.70) 0%, rgba(20, 20, 24, 0.65) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-top: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 14px;
+    background: linear-gradient(180deg, rgba(34, 34, 40, 0.75) 0%, rgba(22, 22, 26, 0.70) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 16px;
     padding: 14px 16px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     transition: all 140ms ease;
 }
 
 box.tk-row:hover {
-    background: linear-gradient(180deg, rgba(40, 40, 48, 0.85) 0%, rgba(26, 26, 32, 0.80) 100%);
-    border-color: rgba(255, 255, 255, 0.22);
+    background: linear-gradient(180deg, rgba(42, 42, 50, 0.88) 0%, rgba(28, 28, 34, 0.82) 100%);
+    border-color: rgba(255, 255, 255, 0.24);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
 }
 
@@ -516,9 +560,10 @@ button.tk-menu-item-btn:hover {
 
 /* Merged inline Add Task card below title */
 box.tk-add-card {
-    background-color: #131317;
-    border: 1px solid #222228;
-    border-radius: 12px;
+    background: linear-gradient(180deg, rgba(28, 28, 34, 0.70) 0%, rgba(20, 20, 24, 0.65) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 14px;
     padding: 10px 14px;
     margin: 2px 0 6px 0;
     box-shadow: none;
@@ -526,13 +571,14 @@ box.tk-add-card {
 }
 
 box.tk-add-card:hover {
-    background-color: #17171D;
-    border-color: #2E2E37;
+    background: linear-gradient(180deg, rgba(34, 34, 42, 0.85) 0%, rgba(24, 24, 30, 0.80) 100%);
+    border-color: rgba(255, 255, 255, 0.20);
 }
 
 box.tk-add-card.expanded {
-    background-color: #131317;
-    border-color: #363640;
+    background: rgba(22, 22, 26, 0.95);
+    border-color: rgba(255, 255, 255, 0.22);
+    border-radius: 16px;
     padding: 12px 14px 14px 14px;
 }
 
@@ -612,6 +658,18 @@ label.tk-task-detail {
     font-size: 12px;
     color: #8E8E93;
     margin-top: 2px;
+}
+
+picture.tk-detail-img {
+    border-radius: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.40);
+    transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+picture.tk-detail-img:hover {
+    border-color: rgba(255, 255, 255, 0.35);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
 }
 
 box.tk-add-plus-badge {
