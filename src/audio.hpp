@@ -115,6 +115,14 @@ inline bool play_sound(SoundEvent ev, bool force_ignore_debounce = false) {
     if (waveOutGetNumDevs() == 0) {
         return true;
     }
+    if (ev == SoundEvent::Alert) {
+        static std::string sound_file = locate_sound_file();
+        if (!sound_file.empty()) {
+            if (PlaySoundA(sound_file.c_str(), NULL, SND_FILENAME | SND_ASYNC | SND_NODEFAULT)) {
+                return true;
+            }
+        }
+    }
     const char* alias = "SystemAsterisk";
     if (ev == SoundEvent::Complete) {
         alias = "SystemNotification";
