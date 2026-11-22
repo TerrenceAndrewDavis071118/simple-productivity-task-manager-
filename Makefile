@@ -15,12 +15,14 @@ endif
 ifeq ($(IS_WIN),1)
     TARGET := build/task-killer.exe
     TEST_TARGET := build/test_store_and_alerts.exe
+    INSTALLER_TARGET := build/task-killer-installer.exe
     PKGS := gtk4
     LDFLAGS_EXTRA := -mwindows -lwinmm
     TEST_LDFLAGS_EXTRA := -lwinmm
 else
     TARGET := build/task-killer
     TEST_TARGET := build/test_store_and_alerts
+    INSTALLER_TARGET := build/task-killer-installer
     PKGS := gtk4 libnotify
     LDFLAGS_EXTRA :=
     TEST_LDFLAGS_EXTRA :=
@@ -29,9 +31,15 @@ endif
 SRC := src/main.cpp
 HEADERS := src/platform.hpp src/store.hpp src/style.hpp src/audio.hpp
 
-.PHONY: all clean deb test zip run
+.PHONY: all clean deb test zip run installer
 
 all: $(TARGET)
+
+installer: $(TARGET) $(INSTALLER_TARGET)
+
+$(INSTALLER_TARGET): src/installer_main.cpp src/installer_ui.hpp $(TARGET)
+	@mkdir -p build
+	$(CXX) $(CXXFLAGS) src/installer_main.cpp -o $(INSTALLER_TARGET) $$(pkg-config --cflags --libs gtk4) $(LDFLAGS_EXTRA)
 
 run: all
 	./$(TARGET)

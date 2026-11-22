@@ -54,4 +54,5 @@ Description: Minimalist Apple-styled task manager for Zorin OS
 EOF
 
 dpkg-deb --build --root-owner-group "${STAGE}" "${DEB_FILE}"
+chmod 644 "${DEB_FILE}" || true
 echo "Built: ${DEB_FILE}"
