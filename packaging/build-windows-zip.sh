@@ -23,6 +23,36 @@ mkdir -p "${DIST_DIR}"
 # 1. Copy application binary
 cp build/task-killer.exe "${STAGE_DIR}/"
 
+# 1b. Copy installer if present
+if [ -f "build/task-killer-installer.exe" ]; then
+    cp build/task-killer-installer.exe "${STAGE_DIR}/"
+fi
+
+# 1c. Add robust launcher script with extraction verification
+cat << 'EOF' > "${STAGE_DIR}/RUN_TASK_KILLER.bat"
+@echo off
+setlocal
+cd /d "%~dp0"
+if exist "libgtk-4-1.dll" goto :launch
+
+echo ============================================================
+echo [ERROR] Required runtime libraries (.dll) not found!
+echo.
+echo It looks like you ran Task Killer directly from inside a ZIP
+echo file without extracting it first.
+echo.
+echo Please right-click the downloaded ZIP file, click Extract All
+echo (Ekstrak Semua), and then run RUN_TASK_KILLER.bat or task-killer.exe
+echo from the extracted folder.
+echo ============================================================
+echo.
+pause
+exit /b 1
+
+:launch
+start "" "%~dp0task-killer.exe" %*
+EOF
+
 # 2. Copy assets
 if [ -d "assets" ]; then
     cp -r assets "${STAGE_DIR}/"
@@ -74,21 +104,22 @@ echo "Collecting runtime DLL dependencies..."
 
 copy_dll_if_needed() {
     local dll_name="$1"
-    # Skip standard Windows system DLLs that must not be bundled
-    case "$dll_name" in
-        advapi32.dll|kernel32.dll|user32.dll|gdi32.dll|shell32.dll|msvcrt.dll|ucrtbase.dll|ntdll.dll|winmm.dll|ws2_32.dll|ole32.dll|oleaut32.dll|comctl32.dll|comdlg32.dll|imm32.dll|shlwapi.dll|version.dll|secur32.dll|crypt32.dll|bcrypt.dll|rpcrt4.dll|wldap32.dll|dnsapi.dll|iphlpapi.dll|setupapi.dll|uxtheme.dll|dwmapi.dll)
+    local lower_name
+    lower_name=$(echo "$dll_name" | tr '[:upper:]' '[:lower:]')
+
+    # Skip standard Windows system DLLs and API sets
+    case "$lower_name" in
+        advapi32.dll|kernel32.dll|user32.dll|gdi32.dll|shell32.dll|msvcrt.dll|ucrtbase.dll|ntdll.dll|winmm.dll|ws2_32.dll|ole32.dll|oleaut32.dll|comctl32.dll|comdlg32.dll|imm32.dll|shlwapi.dll|version.dll|secur32.dll|crypt32.dll|bcrypt.dll|rpcrt4.dll|wldap32.dll|dnsapi.dll|iphlpapi.dll|setupapi.dll|uxtheme.dll|dwmapi.dll|api-ms-win-*|ext-ms-win-*)
             return 0
             ;;
     esac
 
-    if [ ! -f "${STAGE_DIR}/${dll_name}" ]; then
+    if [ ! -f "${STAGE_DIR}/${lower_name}" ] && [ ! -f "${STAGE_DIR}/${dll_name}" ]; then
         if [ -f "${MINGW_BIN}/${dll_name}" ]; then
             cp "${MINGW_BIN}/${dll_name}" "${STAGE_DIR}/"
             return 1
         fi
-        local lower_name
-        lower_name=$(echo "$dll_name" | tr '[:upper:]' '[:lower:]')
-        if [ ! -f "${STAGE_DIR}/${lower_name}" ] && [ -f "${MINGW_BIN}/${lower_name}" ]; then
+        if [ -f "${MINGW_BIN}/${lower_name}" ]; then
             cp "${MINGW_BIN}/${lower_name}" "${STAGE_DIR}/"
             return 1
         fi
@@ -122,8 +153,7 @@ copy_dependencies() {
                 for dll_path in $(ntldd -R "$binary" 2>/dev/null | grep -iE "${MINGW_PREFIX_DIR}|mingw|ucrt" | awk '{print $3}'); do
                     if [ -f "$dll_path" ]; then
                         dll_file=$(basename "$dll_path")
-                        if [ ! -f "${STAGE_DIR}/${dll_file}" ]; then
-                            cp "$dll_path" "${STAGE_DIR}/"
+                        if ! copy_dll_if_needed "$dll_file"; then
                             added=$((added + 1))
                         fi
                     fi
@@ -135,8 +165,7 @@ copy_dependencies() {
                 for dll_path in $(ldd "$binary" 2>/dev/null | grep -iE "${MINGW_PREFIX_DIR}|mingw|ucrt" | awk '{print $3}'); do
                     if [ -f "$dll_path" ]; then
                         dll_file=$(basename "$dll_path")
-                        if [ ! -f "${STAGE_DIR}/${dll_file}" ]; then
-                            cp "$dll_path" "${STAGE_DIR}/"
+                        if ! copy_dll_if_needed "$dll_file"; then
                             added=$((added + 1))
                         fi
                     fi
@@ -147,6 +176,14 @@ copy_dependencies() {
 }
 
 copy_dependencies
+
+# Clean up any inadvertently bundled OS system DLLs that conflict on Windows 10/11
+rm -f "${STAGE_DIR}/ucrtbase.dll"
+
+# Make loaders.cache relocatable by stripping host build runner path
+if [ -f "${STAGE_DIR}/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" ]; then
+    sed -i '/^# LoaderDir/d' "${STAGE_DIR}/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache" 2>/dev/null || true
+fi
 
 # 8. Create ZIP archive
 ABS_ZIP_FILE="$(cd "${DIST_DIR}" && pwd)/$(basename "${ZIP_FILE}")"

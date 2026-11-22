@@ -19,6 +19,7 @@ ifeq ($(IS_WIN),1)
     PKGS := gtk4
     LDFLAGS_EXTRA := -mwindows -lwinmm
     TEST_LDFLAGS_EXTRA := -lwinmm
+    INSTALLER_LDFLAGS_EXTRA := -lole32 -luuid -lshell32
 else
     TARGET := build/task-killer
     TEST_TARGET := build/test_store_and_alerts
@@ -26,6 +27,7 @@ else
     PKGS := gtk4 libnotify
     LDFLAGS_EXTRA :=
     TEST_LDFLAGS_EXTRA :=
+    INSTALLER_LDFLAGS_EXTRA :=
 endif
 
 SRC := src/main.cpp
@@ -39,7 +41,7 @@ installer: $(TARGET) $(INSTALLER_TARGET)
 
 $(INSTALLER_TARGET): src/installer_main.cpp src/installer_ui.hpp $(TARGET)
 	@mkdir -p build
-	$(CXX) $(CXXFLAGS) src/installer_main.cpp -o $(INSTALLER_TARGET) $$(pkg-config --cflags --libs gtk4) $(LDFLAGS_EXTRA)
+	$(CXX) $(CXXFLAGS) src/installer_main.cpp -o $(INSTALLER_TARGET) $$(pkg-config --cflags --libs gtk4) $(LDFLAGS_EXTRA) $(INSTALLER_LDFLAGS_EXTRA)
 
 run: all
 	./$(TARGET)
@@ -58,7 +60,7 @@ $(TEST_TARGET): tests/test_store_and_alerts.cpp src/platform.hpp src/store.hpp s
 deb: all
 	./packaging/build-deb.sh
 
-zip: all
+zip: all installer
 	./packaging/build-windows-zip.sh
 
 clean:

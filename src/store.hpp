@@ -328,7 +328,7 @@ public:
 
     void load() {
         tasks.clear();
-        std::ifstream in(db_path_.string());
+        std::ifstream in(db_path_);
         if (!in) return;
         std::string line;
         while (std::getline(in, line)) {
@@ -377,7 +377,7 @@ public:
     void save() const {
         std::error_code ec;
         std::filesystem::create_directories(db_path_.parent_path(), ec);
-        std::ofstream out(db_path_.string(), std::ios::trunc);
+        std::ofstream out(db_path_, std::ios::trunc);
         if (!out) return;
         for (const auto& t : tasks) {
             out << t.id << '\t'

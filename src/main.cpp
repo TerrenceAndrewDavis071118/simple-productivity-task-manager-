@@ -2507,7 +2507,11 @@ static void on_activate(GtkApplication*, gpointer user_data) {
 } // namespace
 
 int main(int argc, char** argv) {
-#ifndef _WIN32
+#ifdef _WIN32
+    if (!tk::setup_windows_environment(L"Task Killer")) {
+        return 1;
+    }
+#else
     notify_init("Task Killer");
 #endif
 
