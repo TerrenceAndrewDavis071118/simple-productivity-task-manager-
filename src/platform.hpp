@@ -21,6 +21,42 @@
 
 namespace tk {
 
+inline void localtime_safe(const time_t* t, std::tm* out) {
+    if (!t || !out) return;
+#ifdef _WIN32
+    time_t clamped = (*t < 0) ? 0 : *t;
+    if (localtime_s(out, &clamped) != 0) {
+        std::memset(out, 0, sizeof(*out));
+    }
+#else
+    if (!localtime_r(t, out)) {
+        std::memset(out, 0, sizeof(*out));
+    }
+#endif
+}
+
+inline std::filesystem::path get_executable_path() {
+    std::error_code ec;
+#ifdef _WIN32
+    std::vector<wchar_t> buf(MAX_PATH);
+    while (true) {
+        DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (len == 0) {
+            return "";
+        }
+        if (len < buf.size()) {
+            auto p = std::filesystem::path(buf.data());
+            return p.lexically_normal();
+        }
+        buf.resize(buf.size() * 2);
+    }
+#else
+    auto exe = std::filesystem::canonical("/proc/self/exe", ec);
+    if (!ec && !exe.empty()) return exe;
+    return "";
+#endif
+}
+
 #ifdef _WIN32
 inline LONG WINAPI unhandled_crash_filter(EXCEPTION_POINTERS* ep) {
     wchar_t msg[512];
@@ -94,42 +130,6 @@ inline bool setup_windows_environment(const wchar_t* app_name = L"Task Killer") 
     return true;
 }
 #endif
-
-inline void localtime_safe(const time_t* t, std::tm* out) {
-    if (!t || !out) return;
-#ifdef _WIN32
-    time_t clamped = (*t < 0) ? 0 : *t;
-    if (localtime_s(out, &clamped) != 0) {
-        std::memset(out, 0, sizeof(*out));
-    }
-#else
-    if (!localtime_r(t, out)) {
-        std::memset(out, 0, sizeof(*out));
-    }
-#endif
-}
-
-inline std::filesystem::path get_executable_path() {
-    std::error_code ec;
-#ifdef _WIN32
-    std::vector<wchar_t> buf(MAX_PATH);
-    while (true) {
-        DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-        if (len == 0) {
-            return "";
-        }
-        if (len < buf.size()) {
-            auto p = std::filesystem::path(buf.data());
-            return p.lexically_normal();
-        }
-        buf.resize(buf.size() * 2);
-    }
-#else
-    auto exe = std::filesystem::canonical("/proc/self/exe", ec);
-    if (!ec && !exe.empty()) return exe;
-    return "";
-#endif
-}
 
 inline std::string normalize_path_string(const std::filesystem::path& p) {
     std::error_code ec;
