@@ -14,6 +14,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <objbase.h>
 #include <shobjidl.h>
