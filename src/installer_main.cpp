@@ -26,12 +26,14 @@ namespace {
 
 #ifdef _WIN32
 static bool create_windows_shortcut(const std::wstring& target_exe, const std::wstring& link_path, const std::wstring& description, const std::wstring& work_dir) {
-    HRESULT hr = CoInitialize(nullptr);
-    bool co_init = SUCCEEDED(hr);
+    // Note: Do NOT call CoUninitialize() on GTK's main GUI thread because GTK4 / GDK Win32
+    // requires COM to remain initialized for windowing, clipboard, and direct composition.
+    // Calling CoUninitialize() tears down GTK4's COM apartment and causes crash 0xC0000005.
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
     IShellLinkW* psl = nullptr;
-    hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&psl));
-    if (SUCCEEDED(hr)) {
+    HRESULT hr = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&psl));
+    if (SUCCEEDED(hr) && psl) {
         psl->SetPath(target_exe.c_str());
         psl->SetDescription(description.c_str());
         if (!work_dir.empty()) {
@@ -40,14 +42,11 @@ static bool create_windows_shortcut(const std::wstring& target_exe, const std::w
 
         IPersistFile* ppf = nullptr;
         hr = psl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&ppf));
-        if (SUCCEEDED(hr)) {
+        if (SUCCEEDED(hr) && ppf) {
             hr = ppf->Save(link_path.c_str(), TRUE);
             ppf->Release();
         }
         psl->Release();
-    }
-    if (co_init) {
-        CoUninitialize();
     }
     return SUCCEEDED(hr);
 }
@@ -258,6 +257,36 @@ static std::filesystem::path find_source_sound() {
     return "";
 }
 
+static void copy_dir_recursive(const std::filesystem::path& src, const std::filesystem::path& dst) {
+    std::error_code ec;
+    std::filesystem::create_directories(dst, ec);
+    if (!std::filesystem::exists(src, ec) || ec) return;
+
+    try {
+        for (auto it = std::filesystem::recursive_directory_iterator(src, std::filesystem::directory_options::skip_permission_denied, ec);
+             it != std::filesystem::recursive_directory_iterator();
+             it.increment(ec)) {
+            if (ec) {
+                ec.clear();
+                continue;
+            }
+            std::error_code item_ec;
+            auto rel = std::filesystem::relative(it->path(), src, item_ec);
+            if (item_ec) continue;
+            auto target = dst / rel;
+
+            if (it->is_directory(item_ec)) {
+                std::filesystem::create_directories(target, item_ec);
+            } else if (it->is_regular_file(item_ec)) {
+                std::filesystem::create_directories(target.parent_path(), item_ec);
+                std::filesystem::copy_file(it->path(), target, std::filesystem::copy_options::overwrite_existing, item_ec);
+            }
+        }
+    } catch (...) {
+        // Suppress non-fatal directory traversal error to preserve core installation
+    }
+}
+
 static gboolean on_install_progress(gpointer user_data) {
     auto* s = static_cast<InstallerState*>(user_data);
     s->progress_val += 0.05;
@@ -268,105 +297,127 @@ static gboolean on_install_progress(gpointer user_data) {
         gtk_label_set_text(GTK_LABEL(s->status_lbl), "Installation completed successfully.");
         gtk_label_set_text(GTK_LABEL(s->detail_lbl), "Registered PowerStack Corp. components and desktop links.");
 
-        // Target Directory resolution
-        std::string target_dir_str = gtk_editable_get_text(GTK_EDITABLE(s->entry_dir));
-        if (target_dir_str.empty()) {
-            const char* home = g_get_home_dir();
-            target_dir_str = std::string(home) + "/.local/bin";
-        }
-        std::filesystem::path target_dir(target_dir_str);
-        std::error_code ec;
-        std::filesystem::create_directories(target_dir, ec);
+        try {
+            // Target Directory resolution
+            std::string target_dir_str = gtk_editable_get_text(GTK_EDITABLE(s->entry_dir));
+            if (target_dir_str.empty()) {
+                const char* home = g_get_home_dir();
+                target_dir_str = std::string(home ? home : ".") + "/.local/bin";
+            }
+            std::filesystem::path target_dir(target_dir_str);
+            std::error_code ec;
+            std::filesystem::create_directories(target_dir, ec);
 
 #ifdef _WIN32
-        std::string exe_name = "task-killer.exe";
+            std::string exe_name = "task-killer.exe";
 #else
-        std::string exe_name = "task-killer";
+            std::string exe_name = "task-killer";
 #endif
-        std::filesystem::path dest_bin = target_dir / exe_name;
-        s->installed_binary_path = dest_bin.string();
+            std::filesystem::path dest_bin = target_dir / exe_name;
+            s->installed_binary_path = dest_bin.string();
 
-        // 1. Copy application executable
-        std::filesystem::path src_bin = find_source_binary();
-        if (!src_bin.empty() && std::filesystem::exists(src_bin, ec)) {
-            std::filesystem::copy_file(src_bin, dest_bin, std::filesystem::copy_options::overwrite_existing, ec);
-            if (ec) {
-                s->install_success = false;
-            } else {
+            // 1. Copy application executable
+            std::filesystem::path src_bin = find_source_binary();
+            if (!src_bin.empty() && std::filesystem::exists(src_bin, ec)) {
+                std::filesystem::copy_file(src_bin, dest_bin, std::filesystem::copy_options::overwrite_existing, ec);
+                if (ec) {
+                    s->install_success = false;
+                } else {
 #ifndef _WIN32
-                std::filesystem::permissions(dest_bin,
-                    std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
-                    std::filesystem::perms::others_read | std::filesystem::perms::others_exec, ec);
+                    std::filesystem::permissions(dest_bin,
+                        std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
+                        std::filesystem::perms::others_read | std::filesystem::perms::others_exec, ec);
 #endif
-                s->install_success = true;
-            }
+                    s->install_success = true;
+                }
 
-            // Copy all companion DLLs, helper executables, and resources from source directory
-            std::filesystem::path src_dir = src_bin.parent_path();
-            std::error_code dir_ec;
-            if (!src_dir.empty() && std::filesystem::exists(src_dir, dir_ec) && !dir_ec) {
-                for (const auto& entry : std::filesystem::directory_iterator(src_dir, dir_ec)) {
-                    if (dir_ec) break;
-                    std::error_code item_ec;
-                    auto filename = entry.path().filename().string();
-                    if (filename == "task-killer-installer.exe" || filename == "task-killer-installer") {
-                        continue;
-                    }
-                    if (entry.is_regular_file(item_ec) && !item_ec) {
-                        auto ext = entry.path().extension().string();
-                        if (ext == ".dll" || ext == ".exe" || ext == ".wav" || ext == ".bat" || ext == ".svg") {
-                            std::error_code copy_ec;
-                            std::filesystem::copy_file(entry.path(), target_dir / entry.path().filename(),
-                                std::filesystem::copy_options::overwrite_existing, copy_ec);
+                // Copy all companion DLLs, helper executables, and resources from source directory
+                std::filesystem::path src_dir = src_bin.parent_path();
+                std::error_code dir_ec;
+                if (!src_dir.empty() && std::filesystem::exists(src_dir, dir_ec) && !dir_ec) {
+                    for (const auto& entry : std::filesystem::directory_iterator(src_dir, dir_ec)) {
+                        if (dir_ec) break;
+                        std::error_code item_ec;
+                        auto filename = entry.path().filename().string();
+                        if (filename == "task-killer-installer.exe" || filename == "task-killer-installer") {
+                            continue;
                         }
-                    } else if (entry.is_directory(item_ec) && !item_ec) {
-                        if (filename == "share" || filename == "lib" || filename == "assets") {
-                            std::error_code tree_ec;
-                            std::filesystem::create_directories(target_dir / filename, tree_ec);
-                            std::filesystem::copy(entry.path(), target_dir / filename,
-                                std::filesystem::copy_options::recursive | std::filesystem::copy_options::overwrite_existing, tree_ec);
+                        if (entry.is_regular_file(item_ec) && !item_ec) {
+                            auto ext = entry.path().extension().string();
+                            if (ext == ".dll" || ext == ".exe" || ext == ".wav" || ext == ".bat" || ext == ".svg") {
+                                std::error_code copy_ec;
+                                std::filesystem::copy_file(entry.path(), target_dir / entry.path().filename(),
+                                    std::filesystem::copy_options::overwrite_existing, copy_ec);
+                            }
+                        } else if (entry.is_directory(item_ec) && !item_ec) {
+                            if (filename == "share" || filename == "lib" || filename == "assets") {
+                                copy_dir_recursive(entry.path(), target_dir / filename);
+                            }
                         }
                     }
                 }
+            } else {
+                s->install_success = false;
             }
-        } else {
-            s->install_success = false;
-        }
 
-        // 2. Copy audio asset if present
-        std::filesystem::path src_snd = find_source_sound();
-        if (!src_snd.empty()) {
-            std::filesystem::path assets_dir = target_dir / "assets";
-            std::filesystem::create_directories(assets_dir, ec);
-            std::filesystem::copy_file(src_snd, assets_dir / "beeb.wav", std::filesystem::copy_options::overwrite_existing, ec);
-            std::filesystem::copy_file(src_snd, target_dir / "beeb.wav", std::filesystem::copy_options::overwrite_existing, ec);
-        }
+            // 2. Copy audio asset if present
+            std::filesystem::path src_snd = find_source_sound();
+            if (!src_snd.empty()) {
+                std::filesystem::path assets_dir = target_dir / "assets";
+                std::filesystem::create_directories(assets_dir, ec);
+                std::filesystem::copy_file(src_snd, assets_dir / "beeb.wav", std::filesystem::copy_options::overwrite_existing, ec);
+                std::filesystem::copy_file(src_snd, target_dir / "beeb.wav", std::filesystem::copy_options::overwrite_existing, ec);
+            }
 
 #ifdef _WIN32
-        // 3. Windows Desktop & Start Menu Shortcut creation
-        if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_desktop_icon))) {
-            wchar_t desk_path[MAX_PATH];
-            if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, SHGFP_TYPE_CURRENT, desk_path))) {
-                std::filesystem::path link = std::filesystem::path(desk_path) / "Task Killer.lnk";
-                create_windows_shortcut(dest_bin.wstring(), link.wstring(), L"Executive Task Manager by PowerStack Corp.", target_dir.wstring());
+            // 3. Windows Desktop & Start Menu Shortcut creation
+            if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_desktop_icon))) {
+                wchar_t desk_path[MAX_PATH];
+                if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, SHGFP_TYPE_CURRENT, desk_path))) {
+                    std::filesystem::path link = std::filesystem::path(desk_path) / "Task Killer.lnk";
+                    create_windows_shortcut(dest_bin.wstring(), link.wstring(), L"Executive Task Manager by PowerStack Corp.", target_dir.wstring());
+                }
             }
-        }
-        if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_start_menu))) {
-            wchar_t start_path[MAX_PATH];
-            if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROGRAMS, nullptr, SHGFP_TYPE_CURRENT, start_path))) {
-                std::filesystem::path prog_dir = std::filesystem::path(start_path) / "Task Killer";
-                std::filesystem::create_directories(prog_dir, ec);
-                std::filesystem::path link = prog_dir / "Task Killer.lnk";
-                create_windows_shortcut(dest_bin.wstring(), link.wstring(), L"Executive Task Manager by PowerStack Corp.", target_dir.wstring());
+            if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_start_menu))) {
+                wchar_t start_path[MAX_PATH];
+                if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_PROGRAMS, nullptr, SHGFP_TYPE_CURRENT, start_path))) {
+                    std::filesystem::path prog_dir = std::filesystem::path(start_path) / "Task Killer";
+                    std::filesystem::create_directories(prog_dir, ec);
+                    std::filesystem::path link = prog_dir / "Task Killer.lnk";
+                    create_windows_shortcut(dest_bin.wstring(), link.wstring(), L"Executive Task Manager by PowerStack Corp.", target_dir.wstring());
+                }
             }
-        }
 #else
-        // 3. Desktop Shortcut (.desktop)
-        if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_desktop_icon))) {
-            const char* desktop_env = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
-            std::filesystem::path desktop_dir = desktop_env ? std::filesystem::path(desktop_env) : (std::filesystem::path(g_get_home_dir()) / "Desktop");
-            if (std::filesystem::exists(desktop_dir, ec)) {
-                std::ofstream ofs(desktop_dir / "TaskKiller.desktop");
+            // 3. Desktop Shortcut (.desktop)
+            if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_desktop_icon))) {
+                const char* desktop_env = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
+                std::filesystem::path desktop_dir = desktop_env ? std::filesystem::path(desktop_env) : (std::filesystem::path(g_get_home_dir()) / "Desktop");
+                if (std::filesystem::exists(desktop_dir, ec)) {
+                    std::ofstream ofs(desktop_dir / "TaskKiller.desktop");
+                    if (ofs.is_open()) {
+                        ofs << "[Desktop Entry]\n"
+                            << "Version=1.0\n"
+                            << "Type=Application\n"
+                            << "Name=Task Killer\n"
+                            << "GenericName=Productivity & Deadline Manager\n"
+                            << "Comment=Executive Task Manager by PowerStack Corp.\n"
+                            << "Exec=\"" << dest_bin.string() << "\"\n"
+                            << "Icon=utilities-terminal\n"
+                            << "Terminal=false\n"
+                            << "Categories=Utility;Office;\n";
+                        ofs.close();
+                        std::filesystem::permissions(desktop_dir / "TaskKiller.desktop",
+                            std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::others_read, ec);
+                    }
+                }
+            }
+
+            // 4. System Application Launcher Menu registration
+            if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_start_menu))) {
+                const char* data_home = g_get_user_data_dir();
+                std::filesystem::path apps_dir = std::filesystem::path(data_home) / "applications";
+                std::filesystem::create_directories(apps_dir, ec);
+                std::ofstream ofs(apps_dir / "task-killer.desktop");
                 if (ofs.is_open()) {
                     ofs << "[Desktop Entry]\n"
                         << "Version=1.0\n"
@@ -379,33 +430,12 @@ static gboolean on_install_progress(gpointer user_data) {
                         << "Terminal=false\n"
                         << "Categories=Utility;Office;\n";
                     ofs.close();
-                    std::filesystem::permissions(desktop_dir / "TaskKiller.desktop",
-                        std::filesystem::perms::owner_all | std::filesystem::perms::group_read | std::filesystem::perms::others_read, ec);
                 }
             }
-        }
-
-        // 4. System Application Launcher Menu registration
-        if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_start_menu))) {
-            const char* data_home = g_get_user_data_dir();
-            std::filesystem::path apps_dir = std::filesystem::path(data_home) / "applications";
-            std::filesystem::create_directories(apps_dir, ec);
-            std::ofstream ofs(apps_dir / "task-killer.desktop");
-            if (ofs.is_open()) {
-                ofs << "[Desktop Entry]\n"
-                    << "Version=1.0\n"
-                    << "Type=Application\n"
-                    << "Name=Task Killer\n"
-                    << "GenericName=Productivity & Deadline Manager\n"
-                    << "Comment=Executive Task Manager by PowerStack Corp.\n"
-                    << "Exec=\"" << dest_bin.string() << "\"\n"
-                    << "Icon=utilities-terminal\n"
-                    << "Terminal=false\n"
-                    << "Categories=Utility;Office;\n";
-                ofs.close();
-            }
-        }
 #endif
+        } catch (...) {
+            s->install_success = false;
+        }
 
         // Switch to finish step
         set_step(s, Step::Finish);
@@ -447,13 +477,23 @@ static void on_next_clicked(GtkButton*, gpointer user_data) {
             s->install_timer_id = g_timeout_add(100, on_install_progress, s);
             break;
         case Step::Finish:
-            if (gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_launch_now))) {
-                if (!s->installed_binary_path.empty() && std::filesystem::exists(s->installed_binary_path)) {
-                    char* argv_launch[] = { const_cast<char*>(s->installed_binary_path.c_str()), nullptr };
-                    GError* err = nullptr;
-                    g_spawn_async(nullptr, argv_launch, nullptr, G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, &err);
-                    if (err) {
-                        g_error_free(err);
+            if (s->install_success && gtk_check_button_get_active(GTK_CHECK_BUTTON(s->chk_launch_now))) {
+                if (!s->installed_binary_path.empty()) {
+                    std::error_code ec;
+                    std::filesystem::path bin_p(s->installed_binary_path);
+                    if (std::filesystem::exists(bin_p, ec) && !ec) {
+#ifdef _WIN32
+                        std::wstring bin_w = bin_p.wstring();
+                        std::wstring dir_w = bin_p.parent_path().wstring();
+                        ShellExecuteW(nullptr, L"open", bin_w.c_str(), nullptr, dir_w.c_str(), SW_SHOWNORMAL);
+#else
+                        char* argv_launch[] = { const_cast<char*>(s->installed_binary_path.c_str()), nullptr };
+                        GError* err = nullptr;
+                        g_spawn_async(nullptr, argv_launch, nullptr, G_SPAWN_SEARCH_PATH, nullptr, nullptr, nullptr, &err);
+                        if (err) {
+                            g_error_free(err);
+                        }
+#endif
                     }
                 }
             }

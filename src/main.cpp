@@ -2014,7 +2014,7 @@ static GtkWidget* build_add_composer(AppState* s) {
                                    GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
     gtk_widget_set_vexpand(desc_scroller, TRUE);
     gtk_widget_set_hexpand(desc_scroller, TRUE);
-    gtk_widget_set_size_request(desc_scroller, 180, 190);
+    gtk_widget_set_size_request(desc_scroller, 150, 190);
 
     s->detail_view = gtk_text_view_new();
     gtk_widget_add_css_class(s->detail_view, "tk-detail-entry");
@@ -2302,6 +2302,14 @@ static void build_window(AppState* s) {
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(css);
 
+    GtkSettings* gtk_settings = gtk_settings_get_default();
+    if (gtk_settings) {
+        g_object_set(gtk_settings,
+            "gtk-application-prefer-dark-theme", TRUE,
+            "gtk-theme-name", "Adwaita:dark",
+            nullptr);
+    }
+
     time_t now = std::time(nullptr);
     tk::localtime_safe(&now, &s->stat_date);
     s->range_to = s->stat_date;
@@ -2311,8 +2319,8 @@ static void build_window(AppState* s) {
     s->window = gtk_application_window_new(s->app);
     gtk_widget_add_css_class(s->window, "tk-window");
     gtk_window_set_title(GTK_WINDOW(s->window), "Task Killer");
-    gtk_window_set_default_size(GTK_WINDOW(s->window), 860, 600);
-    gtk_widget_set_size_request(s->window, 560, 480);
+    gtk_window_set_default_size(GTK_WINDOW(s->window), 920, 620);
+    gtk_widget_set_size_request(s->window, 640, 480);
     gtk_window_set_hide_on_close(GTK_WINDOW(s->window), TRUE);
 
     GtkGesture* win_click = gtk_gesture_click_new();
@@ -2384,7 +2392,7 @@ static void build_window(AppState* s) {
     // --- Left side panel (Drawer for Achievements and Statistics) ---
     s->side_panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_add_css_class(s->side_panel, "tk-side-panel");
-    gtk_widget_set_size_request(s->side_panel, 310, -1);
+    gtk_widget_set_size_request(s->side_panel, 290, -1);
     gtk_widget_set_vexpand(s->side_panel, TRUE);
     gtk_widget_set_visible(s->side_panel, FALSE); // Collapsed by default
 
@@ -2507,6 +2515,7 @@ static void on_activate(GtkApplication*, gpointer user_data) {
 } // namespace
 
 int main(int argc, char** argv) {
+    g_setenv("GTK_THEME", "Adwaita:dark", TRUE);
 #ifdef _WIN32
     if (!tk::setup_windows_environment(L"Task Killer")) {
         return 1;

@@ -4,7 +4,7 @@ namespace tk {
 
 constexpr const char* APP_CSS = R"CSS(
 * {
-    font-family: "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+    font-family: "SF Pro Display", "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
 }
 
 /* =========================================================================
@@ -12,6 +12,7 @@ constexpr const char* APP_CSS = R"CSS(
    ========================================================================= */
 
 window.tk-window {
+    background-color: #0E0E12;
     background: radial-gradient(circle at 50% 0%, #16161D 0%, #0A0A0C 100%);
     color: #F5F5F7;
 }
@@ -80,14 +81,18 @@ box.tk-tasks-panel {
 
 list.tk-list {
     background: transparent;
+    background-color: transparent;
     border: none;
     box-shadow: none;
     padding: 0;
 }
 
-list.tk-list > row {
+list.tk-list > row,
+list.tk-list > row:not(:first-child) {
     background: transparent;
+    background-color: transparent;
     border: none;
+    border-top: none;
     box-shadow: none;
     outline: none;
     padding: 5px 2px;
@@ -100,15 +105,16 @@ list.tk-list > row:selected,
 list.tk-list > row:focus,
 list.tk-list > row:active {
     background: transparent;
+    background-color: transparent;
     border: none;
+    border-top: none;
     box-shadow: none;
     outline: none;
 }
 
 box.tk-row {
     background: linear-gradient(180deg, rgba(34, 34, 40, 0.75) 0%, rgba(22, 22, 26, 0.70) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-top: 1px solid rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 16px;
     padding: 14px 16px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -187,12 +193,26 @@ label.tk-empty {
     margin-top: 48px;
 }
 
+popover,
+popover.tk-popover {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+popover > arrow,
+popover.tk-popover > arrow {
+    background-color: #202023;
+    border: 1px solid #36363A;
+}
+
 popover.tk-popover > contents {
     background-color: #202023;
     border: 1px solid #36363A;
     border-radius: 16px;
     padding: 14px;
     color: #F5F5F7;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
 }
 
 entry.tk-entry {
@@ -561,8 +581,7 @@ button.tk-menu-item-btn:hover {
 /* Merged inline Add Task card below title */
 box.tk-add-card {
     background: linear-gradient(180deg, rgba(28, 28, 34, 0.70) 0%, rgba(20, 20, 24, 0.65) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-top: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.11);
     border-radius: 14px;
     padding: 10px 14px;
     margin: 2px 0 6px 0;
@@ -583,7 +602,11 @@ box.tk-add-card.expanded {
 }
 
 entry.tk-add-inline-entry,
-entry.tk-add-inline-entry:focus-within {
+entry.tk-add-inline-entry:focus-within,
+entry.tk-add-inline-entry text,
+entry.tk-add-inline-entry > text,
+entry.tk-add-inline-entry text:focus,
+entry.tk-add-inline-entry text:focus-within {
     background: transparent;
     background-color: transparent;
     background-image: none;
@@ -608,7 +631,7 @@ box.tk-add-details {
 textview.tk-detail-entry text {
     background-color: #17171C;
     border: 1px solid #282830;
-    border-radius: 0px;
+    border-radius: 8px;
     color: #F5F5F7;
     padding: 8px 10px;
     font-size: 13px;

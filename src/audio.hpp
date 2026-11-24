@@ -2,6 +2,9 @@
 
 #include <glib.h>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -30,6 +33,57 @@ enum class SoundEvent {
     Click,       // Tap / general UI notification ("message")
     Typing       // Keystroke typing feedback ("audio-volume-change")
 };
+
+#ifdef _WIN32
+// In-memory 18ms mechanical click waveform (zero file I/O, zero external DLL dependencies)
+inline const std::vector<uint8_t>& get_builtin_click_wav() {
+    static const std::vector<uint8_t> wav = []() {
+        const uint32_t sample_rate = 22050;
+        const uint16_t num_channels = 1;
+        const uint16_t bits_per_sample = 16;
+        const size_t num_samples = 396; // ~18ms mechanical click transient
+        const uint32_t data_size = static_cast<uint32_t>(num_samples * sizeof(int16_t));
+        const uint32_t file_size = 36 + data_size;
+
+        std::vector<uint8_t> w(44 + data_size);
+        uint8_t* p = w.data();
+
+        // RIFF chunk descriptor
+        std::memcpy(p + 0, "RIFF", 4);
+        std::memcpy(p + 4, &file_size, 4);
+        std::memcpy(p + 8, "WAVE", 4);
+
+        // "fmt " sub-chunk
+        std::memcpy(p + 12, "fmt ", 4);
+        uint32_t sub1_size = 16;
+        std::memcpy(p + 16, &sub1_size, 4);
+        uint16_t audio_fmt = 1; // PCM
+        std::memcpy(p + 20, &audio_fmt, 2);
+        std::memcpy(p + 22, &num_channels, 2);
+        std::memcpy(p + 24, &sample_rate, 4);
+        uint32_t byte_rate = sample_rate * num_channels * (bits_per_sample / 8);
+        std::memcpy(p + 28, &byte_rate, 4);
+        uint16_t block_align = num_channels * (bits_per_sample / 8);
+        std::memcpy(p + 32, &block_align, 2);
+        std::memcpy(p + 34, &bits_per_sample, 2);
+
+        // "data" sub-chunk
+        std::memcpy(p + 36, "data", 4);
+        std::memcpy(p + 40, &data_size, 4);
+
+        int16_t* samples = reinterpret_cast<int16_t*>(p + 44);
+        for (size_t i = 0; i < num_samples; ++i) {
+            double t = static_cast<double>(i) / sample_rate;
+            double decay = std::exp(-t * 220.0);
+            double s = 0.6 * std::sin(2.0 * 3.141592653589793 * 1600.0 * t) +
+                       0.4 * std::sin(2.0 * 3.141592653589793 * 800.0 * t);
+            samples[i] = static_cast<int16_t>(s * decay * 24000.0);
+        }
+        return w;
+    }();
+    return wav;
+}
+#endif
 
 inline std::string locate_sound_file() {
     std::error_code ec;
@@ -122,12 +176,15 @@ inline bool play_sound(SoundEvent ev, bool force_ignore_debounce = false) {
                 return true;
             }
         }
+    } else if (ev == SoundEvent::Click) {
+        const auto& wav = get_builtin_click_wav();
+        if (PlaySoundA(reinterpret_cast<LPCSTR>(wav.data()), NULL, SND_MEMORY | SND_ASYNC)) {
+            return true;
+        }
     }
     const char* alias = "SystemAsterisk";
     if (ev == SoundEvent::Complete) {
         alias = "SystemNotification";
-    } else if (ev == SoundEvent::Click) {
-        alias = "CCSelect"; // Windows click / select sound
     }
     if (PlaySoundA(alias, NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT)) {
         return true;
@@ -265,7 +322,8 @@ inline bool play_typing_sound() {
 
 #ifdef _WIN32
     if (waveOutGetNumDevs() == 0) return true;
-    return PlaySoundA("CCSelect", NULL, SND_ALIAS | SND_ASYNC | SND_NODEFAULT) != 0;
+    const auto& wav = get_builtin_click_wav();
+    return PlaySoundA(reinterpret_cast<LPCSTR>(wav.data()), NULL, SND_MEMORY | SND_ASYNC) != 0;
 #else
     // Try ultra-fast zero-fork libcanberra in-process call
     if (get_canberra_player().play_event("audio-volume-change")) {
